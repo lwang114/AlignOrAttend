@@ -42,15 +42,13 @@ class MixtureAlignmentLogLikelihood(nn.Module):
       trg_sent = self.softmax(trg_sent)
 
     # Compute p(f_t|y)
-    P_st = torch.tensor(self.P_st)
+    P_st = torch.tensor(self.P_st, device=src_sent.device)
     prob_z_it_given_y = torch.mean(trg_sent, axis=1)
     prob_phi_t_given_y = torch.matmul(prob_z_it_given_y, P_st) 
     
     # Divide each word probability in trg_sent by its duration for taking the average later
     scales = np.ones((B, trg_sent.size()[1]))
     for b in range(B):
-      print(b, B)
-      print(trg_boundary)
       segmentation = np.nonzero(trg_boundary[b].cpu().numpy())[0]
       if segmentation[0] != 0:
         segmentation = np.append(0, segmentation)
@@ -475,6 +473,7 @@ if __name__ == '__main__':
     trg_boundary[b, :len(trg_sents[b])] = 1
   
   device = 'cuda' if torch.cuda.is_available() else 'cpu'
+  print(device)
   src_sent = torch.tensor(src_sent_arr, device=device)
   trg_sent = torch.tensor(trg_sent_arr, device=device)
   src_boundary = torch.tensor(src_boundary, device=device)
