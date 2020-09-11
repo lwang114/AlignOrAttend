@@ -12,7 +12,6 @@ EPS = 1e-100
 class MixtureAlignmentLogLikelihood(nn.Module):
   def __init__(self, configs):
     super(MixtureAlignmentLogLikelihood, self).__init__()
-    # TODO
     self.Ks = configs.get('Ks', 65)
     self.Kt = configs.get('Kt', 49)
     self.L_max = configs.get('L_max', 5)
@@ -24,7 +23,7 @@ class MixtureAlignmentLogLikelihood(nn.Module):
     self.init =  np.zeros(self.L_max) 
     self.P_st = 1. / self.Kt * np.ones((self.Ks, self.Kt)) # Translation probability p(f_t|e_i) 
 
-  def forward(self, src_sent, trg_sent, src_boundary, trg_boundary): # TODO
+  def forward(self, src_sent, trg_sent, src_boundary, trg_boundary):
     # Inputs:
     # ------
     #   src_sent: B x L x Ks tensor [[[g_e(y) for e in range(E)] for i in range(L)] for b in range(B)], where g_e is the source encoder
@@ -43,10 +42,11 @@ class MixtureAlignmentLogLikelihood(nn.Module):
 
     # Compute p(f_t|y)
     P_st = torch.tensor(self.P_st, device=src_sent.device)
-    prob_z_it_given_y = torch.mean(trg_sent, axis=1)
+    prob_z_it_given_y = torch.mean(src_sent, axis=1)
     prob_phi_t_given_y = torch.matmul(prob_z_it_given_y, P_st) 
     
     # Divide each word probability in trg_sent by its duration for taking the average later
+    '''
     scales = np.ones((B, trg_sent.size()[1]))
     for b in range(B):
       segmentation = np.nonzero(trg_boundary[b].cpu().numpy())[0]
@@ -55,23 +55,37 @@ class MixtureAlignmentLogLikelihood(nn.Module):
       for start, end in zip(segmentation[:-1], segmentation[1:]):
         scales[b, start:end] = 1. / max(end - start, 1)
     scales = torch.tensor(scales, device=src_sent.device)
-    EPStensor = torch.tensor(EPS*np.ones(scales.size()), device=src_sent.device)
-    
-    log_likelihood = torch.sum(scales * torch.log(torch.max(torch.sum(prob_phi_t_given_y.unsqueeze(1) * trg_sent, axis=-1), EPStensor)))
+    '''
+    if self.compute_softmax:
+      src_sent = self.softmax(src_sent)
+      trg_sent = self.softmax(self.embed(trg_sent, trg_boundary))
+    else:
+      trg_sent = self.embed(trg_sent, trg_boundary)
+
+    EPStensor = torch.tensor(EPS*np.ones(B), device=src_sent.device)
+    print(torch.sum(prob_phi_t_given_y.unsqueeze(1) * trg_sent, axis=(1, 2)).size(), EPStensor.size())
+    log_likelihood = torch.mean(torch.log(torch.max(torch.sum(prob_phi_t_given_y.unsqueeze(1) * trg_sent, axis=(1, 2)), EPStensor)))
     return log_likelihood
     
   def EMstep(self, src_sent, trg_sent, src_boundary, trg_boundary): # TODO Try different training schedule
     forward_probs, scales = self.compute_forward_probs(src_sent, trg_sent, src_boundary, trg_boundary)  
     backward_probs = self.compute_backward_probs(src_sent, trg_sent, src_boundary, trg_boundary, scales)
+    # print('sum(forward_probs), sum(backward_probs), mean(scales): {} {} {}'.format(np.mean(np.sum(forward_probs, axis=-1)), np.mean(np.sum(backward_probs, axis=-1)), np.mean(scales)))
     new_state_counts = forward_probs * backward_probs / np.maximum(np.sum(forward_probs * backward_probs, axis=(2, 3), keepdims=True), EPS)
-    trg_sent = self.softmax(self.embed(trg_sent, trg_boundary)).cpu().numpy()
+    # print('new_state_counts: {}'.format(np.mean(np.sum(new_state_counts, axis=-1))))
+  
+    if self.compute_softmax:
+      src_sent = self.softmax(src_sent).cpu().numpy()
+      trg_sent = self.softmax(self.embed(trg_sent, trg_boundary)).cpu().numpy()
+    else:
+      trg_sent = self.embed(trg_sent, trg_boundary).cpu().numpy()
 
-    Ts = torch.sum(trg_boundary, axis=-1, dtype=torch.int).cpu().numpy()
+    Ts = torch.sum(trg_boundary, axis=-1, dtype=torch.int).cpu().numpy() - 1
     for b, T in enumerate(Ts): # Mask variable length target sentences
       trg_sent[b, T:] = 0.
     
     self.C_st += np.sum(new_state_counts, axis=2).reshape(-1, self.Ks).T @ trg_sent.reshape(-1, self.Kt)   
-    self.P_st = deepcopy(self.C_st / np.sum(self.C_st, axis=1, keepdims=1))
+    self.P_st = deepcopy(self.C_st / np.maximum(np.sum(self.C_st, axis=1, keepdims=1), EPS))
 
   def compute_forward_probs(self, src_sent, trg_sent, src_boundary, trg_boundary):
     if len(src_sent.size()) == 2:
@@ -79,8 +93,8 @@ class MixtureAlignmentLogLikelihood(nn.Module):
       trg_sent = trg_sent.unsqueeze(0) 
 
     B = src_sent.size()[0]
-    Ts = torch.sum(trg_boundary, axis=-1, dtype=torch.int).cpu().numpy()
-    Ls = torch.sum(src_boundary, axis=-1, dtype=torch.int).cpu().numpy()
+    Ts = torch.sum(trg_boundary, axis=-1, dtype=torch.int).cpu().numpy() - 1
+    Ls = torch.sum(src_boundary, axis=-1, dtype=torch.int).cpu().numpy() - 1
 
     if self.compute_softmax:
       src_sent = self.softmax(src_sent)
@@ -95,19 +109,19 @@ class MixtureAlignmentLogLikelihood(nn.Module):
     scales = np.zeros((B, T_max))
 
     for b in range(B):
-      L = int(Ls[b])
+      L = Ls[b]
       self.init = np.zeros(self.L_max) 
       self.A = np.zeros((self.L_max, self.L_max))
       self.init[:L] = 1. / L 
       self.A[:L, :L] = 1. / L
 
-      T = int(Ts[b])
+      T = Ts[b]
       V_src = src_sent[b]
       V_trg = trg_sent[b]
-      probs_x_t_given_z = V_trg @ self.P_st.T 
+      probs_x_t_given_z = V_trg @ self.P_st.T
       forward_probs[b, 0] = np.tile(self.init[:, np.newaxis], (1, self.Ks)) * V_src * probs_x_t_given_z[0]
       scales[b, 0] = np.sum(forward_probs[b, 0])
-      forward_probs[0] /= np.maximum(scales[b, 0], EPS)
+      forward_probs[b, 0] /= np.maximum(scales[b, 0], EPS)
       for t in range(T-1):
         probs_x_t_z_given_y = V_src * probs_x_t_given_z[t+1]
         A_diag = np.diag(np.diag(self.A))
@@ -126,8 +140,9 @@ class MixtureAlignmentLogLikelihood(nn.Module):
       trg_sent = trg_sent.unsqueeze(0) 
 
     B = src_sent.size()[0]
-    Ts = torch.sum(trg_boundary, axis=-1, dtype=torch.int).cpu().numpy()
-
+    Ts = torch.sum(trg_boundary, axis=-1, dtype=torch.int).cpu().numpy() - 1
+    Ls = torch.sum(src_boundary, axis=-1, dtype=torch.int).cpu().numpy() - 1
+    
     if self.compute_softmax:
       src_sent = self.softmax(src_sent)
       trg_sent = self.softmax(self.embed(trg_sent, trg_boundary))
@@ -139,6 +154,12 @@ class MixtureAlignmentLogLikelihood(nn.Module):
 
     backward_probs = np.zeros((B, self.T_max, self.L_max, self.Ks))
     for b in range(B):
+      L = Ls[b]
+      self.init = np.zeros(self.L_max) 
+      self.A = np.zeros((self.L_max, self.L_max))
+      self.init[:L] = 1. / L 
+      self.A[:L, :L] = 1. / L
+
       T = Ts[b]
       V_src = src_sent[b]
       V_trg = trg_sent[b] 
@@ -148,9 +169,13 @@ class MixtureAlignmentLogLikelihood(nn.Module):
       A_offdiag = self.A - np.diag(np.diag(self.A))
       for t in range(T-1, 0, -1):
         prob_x_t_z_given_y = V_src * probs_x_given_z[t] 
-        backward_probs[b, t-1] += A_diag @ (backward_probs[b, t] * probs_x_given_z[t]) 
-        A_offdiag = self.A - np.diag(np.diag(self.A))
+        backward_probs[b, t-1] = A_diag @ (backward_probs[b, t] * probs_x_given_z[t]) 
+        # if b == 4:
+        #   print('{}: probs_x_given_z[{}]={}'.format(t, t, probs_x_given_z[t].max()))
+        #   print('{}: A_diag.max()={}, backward_probs[b, t]={}, diag term value={}'.format(t, A_diag.max(), backward_probs[b, t].sum(), backward_probs[b, t-1].sum()))
         backward_probs[b, t-1] += np.tile(A_offdiag @ np.sum(backward_probs[b, t] * prob_x_t_z_given_y, axis=-1)[:, np.newaxis], (1, self.Ks))
+        # if b == 4:
+        #   print('{}: full value={}'.format(t, backward_probs[b, t-1].sum()))
         backward_probs[b, t-1] /= max(scales[b, t-1], EPS)
     return backward_probs  
 
@@ -206,7 +231,7 @@ class MarkovAlignmentLogLikelihood(nn.Module):
     # ------
     #   log_likelihood: float log p(x|y)
     log_likelihood = torch.zeros(1, device=src_sent.device, requires_grad=True)
-    Ts = torch.sum(trg_boundary, axis=-1, dtype=torch.int).cpu().numpy()
+    Ts = torch.sum(trg_boundary, axis=-1, dtype=torch.int).cpu().numpy() - 1
 
     trg_embeddings = self.embed(trg_sent)
     trg_sent = self.softmax(trg_embeddings)
@@ -225,7 +250,7 @@ class MarkovAlignmentLogLikelihood(nn.Module):
       offdiag_term = torch.matmul(A_offdiag.T, torch.sum(forward_prob, axis=-1)) * prob_x_t_z_given_y 
       forward_prob = diag_term + offdiag_term
     
-    EPStensor = EPS*torch.ones(B, device=src_sent.device)
+    EPStensor = torch.tensor(EPS*np.ones(B), device=src_sent.device)
     log_likelihood = torch.sum(torch.log(torch.max(torch.sum(forward_prob, axis=(1, 2)), EPStensor))) 
 
     return log_likelihood
@@ -234,18 +259,23 @@ class MarkovAlignmentLogLikelihood(nn.Module):
     forward_probs, scales = self.compute_forward_probs(src_sent, trg_sent, src_boundary, trg_boundary)  
     backward_probs = self.compute_backward_probs(src_sent, trg_sent, src_boundary, trg_boundary, scales)
     new_state_counts = forward_probs * backward_probs / np.maximum(np.sum(forward_probs * backward_probs, axis=(2, 3), keepdims=True), EPS)
-    trg_sent = self.softmax(self.embed(trg_sent, trg_boundary)).cpu().numpy()
-
-    Ts = torch.sum(trg_boundary, axis=-1, dtype=torch.int).cpu().numpy()
+    new_trans_counts = self.compute_transition_counts(forward_probs, backward_probs, src_sent, trg_sent, src_boundary, trg_boundary)
+    if self.compute_softmax:
+      src_sent = self.softmax(src_sent).cpu().numpy()
+      trg_sent = self.softmax(self.embed(trg_sent, trg_boundary)).cpu().numpy()
+    else:
+      trg_sent = self.embed(trg_sent, trg_boundary).cpu().numpy()
+      
+    Ts = torch.sum(trg_boundary, axis=-1, dtype=torch.int).cpu().numpy() - 1
     for b, T in enumerate(Ts): # Mask variable length target sentences
       trg_sent[b, T:] = 0.
     
     self.C_st += np.sum(new_state_counts, axis=2).reshape(-1, self.Ks).T @ trg_sent.reshape(-1, self.Kt) 
     self.C_init += np.sum(new_state_counts, axis=(0, 1, 3))
     self.C_trans += new_trans_counts
-    self.P_st = deepcopy(self.C_st / np.sum(self.C_st, axis=1, keepdims=1))
-    self.A = deepcopy(self.C_trans / np.sum(self.C_trans, axis=1, keepdims=1))
-    self.init = deepcopy(self.C_init / np.sum(self.C_init))
+    self.P_st = deepcopy(self.C_st / np.maximum(np.sum(self.C_st, axis=1, keepdims=1), EPS))
+    self.A = deepcopy(self.C_trans / np.maximum(np.sum(self.C_trans, axis=1, keepdims=1), EPS))
+    self.init = deepcopy(self.C_init / np.maximum(np.sum(self.C_init), EPS))
 
   def compute_forward_probs(self, src_sent, trg_sent, src_boundary, trg_boundary):
     if len(src_sent.size()) == 3:
@@ -253,8 +283,8 @@ class MarkovAlignmentLogLikelihood(nn.Module):
       trg_sent = trg_sent.unsqueeze(0) 
 
     B = src_sent.size()[0]
-    Ts = torch.sum(trg_boundary, axis=-1, dtype=torch.int).cpu().numpy()
-
+    Ts = torch.sum(trg_boundary, axis=-1, dtype=torch.int).cpu().numpy() - 1
+    
     if self.compute_softmax:
       src_sent = self.softmax(src_sent)
       trg_sent = self.softmax(self.embed(trg_sent, trg_boundary))
@@ -274,7 +304,7 @@ class MarkovAlignmentLogLikelihood(nn.Module):
       probs_x_t_given_z = V_trg @ self.P_st.T 
       forward_probs[b, 0] = np.tile(self.init[:, np.newaxis], (1, self.Ks)) * V_src * probs_x_t_given_z[0]
       scales[b, 0] = np.sum(forward_probs[b, 0])
-      forward_probs[0] /= max(scales[b, 0], EPS)
+      forward_probs[b, 0] /= max(scales[b, 0], EPS)
       for t in range(T-1):
         probs_x_t_z_given_y = V_src * probs_x_t_given_z[t+1]
         A_diag = np.diag(np.diag(self.A))
@@ -293,7 +323,7 @@ class MarkovAlignmentLogLikelihood(nn.Module):
       trg_sent = trg_sent.unsqueeze(0) 
 
     B = src_sent.size()[0]
-    Ts = torch.sum(trg_boundary, axis=-1, dtype=torch.int).cpu().numpy()
+    Ts = torch.sum(trg_boundary, axis=-1, dtype=torch.int).cpu().numpy() - 1
 
     if self.compute_softmax:
       src_sent = self.softmax(src_sent)
@@ -327,7 +357,7 @@ class MarkovAlignmentLogLikelihood(nn.Module):
       trg_sent = trg_sent.unsqueeze(0) 
 
     B = src_sent.size()[0]
-    Ts = torch.sum(trg_boundary, axis=-1, dtype=torch.int).cpu().numpy()
+    Ts = torch.sum(trg_boundary, axis=-1, dtype=torch.int).cpu().numpy() - 1
 
     if self.compute_softmax:
       src_sent = self.softmax(src_sent)
@@ -346,7 +376,7 @@ class MarkovAlignmentLogLikelihood(nn.Module):
       T = Ts[b]
       V_src = src_sent[b]
       V_trg = trg_sent[b] 
-  
+      
       probs_x_t_given_z = V_trg @ self.P_st.T
       for t in range(T-1):
         prob_x_t_z_given_y = V_src * probs_x_t_given_z[t+1] 
@@ -469,8 +499,8 @@ if __name__ == '__main__':
   for b in range(len(src_sents)):
     src_sent_arr[b, :len(src_sents[b])] = np.asarray(src_sents[b])
     trg_sent_arr[b, :len(trg_sents[b])] = np.asarray(trg_sents[b])
-    src_boundary[b, :len(src_sents[b])] = 1 
-    trg_boundary[b, :len(trg_sents[b])] = 1
+    src_boundary[b, 1:len(src_sents[b])+1] = 1 
+    trg_boundary[b, 1:len(trg_sents[b])+1] = 1
   
   device = 'cuda' if torch.cuda.is_available() else 'cpu'
   print(device)
@@ -479,7 +509,7 @@ if __name__ == '__main__':
   src_boundary = torch.tensor(src_boundary, device=device)
   trg_boundary = torch.tensor(trg_boundary, device=device)
 
-  log_likelihood = MixtureAlignmentLogLikelihood(configs={'compute_softmax':False, 'Kt': 65})
+  log_likelihood = MixtureAlignmentLogLikelihood(configs={'compute_softmax': False, 'Kt': 65})
   n_iter = 20
   for i_iter in range(n_iter):
     loss = -log_likelihood(src_sent, trg_sent, src_boundary, trg_boundary)
