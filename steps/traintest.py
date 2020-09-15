@@ -9,7 +9,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 def train(audio_model, image_model, alignment_model, train_loader, test_loader, args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() and args.device=='gpu' else "cpu")
     torch.set_grad_enabled(True)
     # Initialize all of the statistics we want to keep track of
     batch_time = AverageMeter()
@@ -38,10 +38,10 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
         print("  best_acc = %.4f" % best_acc)
 
     if not isinstance(audio_model, torch.nn.DataParallel):
-        audio_model = nn.DataParallel(audio_model)
+        audio_model = nn.DataParallel(audio_model, device_ids=[0]) # XXX
 
     if not isinstance(image_model, torch.nn.DataParallel):
-        image_model = nn.DataParallel(image_model)
+        image_model = nn.DataParallel(image_model, device_ids=[0]) # XXX
 
     if epoch != 0:
         audio_model.load_state_dict(torch.load("%s/models/audio_model.%d.pth" % (exp_dir, epoch)))
@@ -156,7 +156,7 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
         epoch += 1
 
 def validate(audio_model, image_model, alignment_model, val_loader, args): # TODO
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() and args.device=='gpu' else "cpu")
     batch_time = AverageMeter()
     if not isinstance(audio_model, torch.nn.DataParallel):
         audio_model = nn.DataParallel(audio_model)

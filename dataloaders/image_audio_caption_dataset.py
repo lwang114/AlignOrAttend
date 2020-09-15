@@ -3,6 +3,9 @@ import json
 import torch
 from torch.utils.data import Dataset, DataLoader
 from sphfile import SPHFile
+import scipy.io.wavfile as wavfile
+import librosa
+from PIL import Image
 
 EPS = 1e-9
 # This function is from DAVEnet (https://github.com/dharwath/DAVEnet-pytorch)
@@ -17,7 +20,7 @@ def preemphasis(signal,coeff=0.97):
 
 class ImageAudioCaptionDataset(Dataset):
   def __init__(self, audio_root_path, image_root_path, segment_file, bbox_file, configs={}):
-    self.config = config
+    self.configs = configs
     self.max_nregions = configs.get('max_num_regions', 5)
     self.max_nphones = configs.get('max_num_phones', 100)
     self.max_nframes = configs.get('max_num_frames', 1000)
@@ -28,15 +31,22 @@ class ImageAudioCaptionDataset(Dataset):
     self.image_keys = []
     self.image_root_path = image_root_path 
     self.bboxes = []
-    self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # Load phone segments
     with open(segment_file, 'r') as f:
       if segment_file.split('.')[-1] == 'json':
         segment_dicts = json.load(f)
         for k in sorted(segment_dicts, key=lambda x:int(x.split('_')[-1])):
-          self.audio_keys.append(k)
-          self.segmentations.append(segment_dicts[k]['data_ids'])
+          audio_file_prefix = '_'.join('_'.join(word_segment_dict[1].split('_')[:-1]) for word_segment_dict in segment_dicts[k]['data_ids'])
+          self.audio_keys.append(audio_file_prefix) # TODO
+          segmentation = []
+          cur_start = 0
+          for word_segment_dict in segment_dicts[k]['data_ids']:
+              for phone_segment in word_segment_dict[2]:
+                  dur = phone_segment[2] - phone_segment[1]
+                  segmentation.append([cur_start, cur_start+dur])
+                  cur_start += dur
+          self.segmentations.append(segmentation)
       else:
         for line in f:
           k, phn, start, end = line.strip().split()
@@ -75,14 +85,16 @@ class ImageAudioCaptionDataset(Dataset):
     mfccs = []
     phone_boundary = np.zeros(self.max_nframes, dtype=int)
     for i_s, segment in enumerate(self.segmentations[idx]):
-      if segment[1] > self.max_nframes:
+      start_ms, end_ms = segment
+      start_frame, end_frame = int(start_ms / 10), int(end_ms / 10)
+      if end_frame > self.max_nframes:
         break
-      phone_boundary[segment[0]] = 1
-      phone_boundary[segment[1]] = 1
+      phone_boundary[start_frame] = 1
+      phone_boundary[end_frame] = 1
 
-    audio_filename = self.audio_filenames[idx]
+    audio_filename = '{}.wav'.format(self.audio_keys[idx])
     try:
-      sr, y = io.wavfile.read('{}/{}'.format(self.audio_root_path, audio_filename))
+      sr, y_wav = wavfile.read('{}/{}'.format(self.audio_root_path, audio_filename))
     except:
       if audio_filename.split('.')[-1] == 'wav':
         audio_filename_sph = '.'.join(audio_filename.split('.')[:-1]+['WAV'])
@@ -110,7 +122,7 @@ class ImageAudioCaptionDataset(Dataset):
       region_mask[i_b] = 1
       x, y, w, h = bbox 
       x, y, w, h = int(x), int(y), np.maximum(int(w), 1), np.maximum(int(h), 1)
-      image = Image.open(self.image_root_path + self.image_keys[idx] + '.jpg').convert('RGB')
+      image = Image.open('{}/{}.jpg'.format(self.image_root_path, '_'.join(self.image_keys[idx].split('_')[:-1]))).convert('RGB')
       if len(np.array(image).shape) == 2:
         print('Wrong shape')
         image = np.tile(np.array(image)[:, :, np.newaxis], (1, 1, 3))  
@@ -119,12 +131,12 @@ class ImageAudioCaptionDataset(Dataset):
       region = image.crop(box=(x, y, x + w, y + h))
       if self.transform:
         region = self.transform(region)
-      regions.append(region)
+      regions.append(np.asarray(region))
 
-    return torch.tensor(mfccs, device=self.device), torch.tensor(regions, device=self.device), torch.tensor(phone_boundary, device=self.device), torch.tensor(region_mask, device=self.device) 
+    return torch.tensor(mfccs), torch.tensor(regions), torch.tensor(phone_boundary), torch.tensor(region_mask) 
  
   def __len__(self):
-    return len(self.audio_filenames)
+    return len(self.audio_keys)
 
   def convert_to_fixed_length(self, mfcc):
     T = mfcc.shape[1] 
