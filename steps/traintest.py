@@ -42,7 +42,10 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
             
     if not isinstance(image_model, torch.nn.DataParallel) and args.device == 'gpu':
         image_model = nn.DataParallel(image_model, device_ids=[device]) # XXX
-            
+
+    if not isinstance(alignment_model, torch.nn.DataParallel) and args.device == 'gpu':
+        alignment_model = nn.DataParallel(alignment_model, device_ids=[device]) # XXX
+        
     if epoch != 0:
         audio_model.load_state_dict(torch.load("%s/models/audio_model.%d.pth" % (exp_dir, epoch)))
         image_model.load_state_dict(torch.load("%s/models/image_model.%d.pth" % (exp_dir, epoch)))
@@ -50,6 +53,7 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
 
     audio_model = audio_model.to(device)
     image_model = image_model.to(device)
+    alignment_model = alignment_model.to(device)
     # Set up the optimizer
     audio_trainables = [p for p in audio_model.parameters() if p.requires_grad]
     image_trainables = [p for p in image_model.parameters() if p.requires_grad]
@@ -93,14 +97,12 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
 
             audio_input = audio_input.to(device)
             image_input = image_input.to(device)
-            print(audio_input.size(), image_input.size())
             optimizer.zero_grad()
 
             audio_output = audio_model(audio_input)
             if len(image_input.size()) >= 5: # Collapse the first two dimensions if image input includes multiple regions per image
                 L = image_input.size(1)
                 image_input = image_input.view(B*L, image_input.size(2), image_input.size(3), image_input.size(4))
-                print(image_input.size)
                 image_output = image_model(image_input)
                 image_output = image_output.view(B, L, -1)
             else:
@@ -114,7 +116,6 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
                 phone_boundary_down[b, segments] = 1 
               phone_boundary = torch.FloatTensor(phone_boundary_down, device=device) 
 
-            print(image_output.size(), audio_output.size())
             loss = -alignment_model(image_output, audio_output, region_mask, phone_boundary)
             loss.backward()
             optimizer.step()

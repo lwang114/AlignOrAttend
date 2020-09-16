@@ -18,9 +18,10 @@ class BLSTM2(nn.Module):
       x.unsqueeze(0)
 
     B = x.size(0)
-    T = x.size(1) 
-    h0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim))
-    c0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim))
+    T = x.size(1)
+    device = 'cuda:1' if x.is_cuda else 'cpu' # XXX
+    h0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim), device=x.device)
+    c0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim), device=x.device)
     embed, _ = self.rnn(x, (h0, c0))
     outputs = []
     for b in range(B):
@@ -50,8 +51,8 @@ class BLSTM3(nn.Module):
     x, _ = self.rnn1(x, save_features=True) 
     B = x.size(0)
     T = x.size(1)
-    h0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim))
-    c0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim))
+    h0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim), device=x.device)
+    c0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim), device=x.device)
     embed, _ = self.rnn2(x)
     outputs = [self.fc(embed[b]) for b in range(B)]
 
@@ -111,7 +112,7 @@ class TDNN3(nn.Module):
     embed = torch.mean(x, -1).squeeze()
     out = self.fc(embed)
     '''
-    print(self.fc1.weight.dtype, self.fc1.bias.dtype)
+    # print(self.fc1.weight.dtype, self.fc1.bias.dtype)
     embed = F.relu(self.fc1(x))
     out = self.fc2(embed)
 

@@ -71,6 +71,7 @@ if args.audio_model == 'tdnn':
   audio_model = TDNN3(n_class=args.n_phone_class)
 elif args.audio_model == 'lstm': # TODO Load pretrained model
   audio_model = BLSTM3(n_class=args.n_phone_class)
+  audio_model.load_state_dict(torch.load('/ws/ifp-53_2/hasegawa/lwang114/summer2020/exp/blstm3_mscoco_train_sgd_lr_0.00001_mar25/audio_model.7.pth'))
 # elif args.audio_model == 'transformer': # TODO
   
 if args.image_model == 'vgg16':
