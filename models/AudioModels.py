@@ -1,6 +1,39 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from espnet.nets.pytorch_backend.transformer.encoder import Encoder
+
+class Transformer(nn.Module):
+  def __init__(self, n_class,
+               embedding_dim=256,
+               pretrained_model_file=None,
+               model_conf_file=None,
+               feat_conf_file=None):
+    super(Transformer, self).__init__()
+    model_conf, feat_conf = {}, {}
+    if model_conf_file and feat_conf_file:
+      with open(model_conf_file, 'r') as fm,\
+           open(feat_conf_file, 'r') as ff:
+        model_conf = yaml.safe_load(fm)
+        feat_conf = yaml.safe_load(ff)
+      
+    idim = feat_conf.get('ndim', 80)
+    num_blocks = model_conf.get('elayers', 12)
+    self.encoder = Encoder(idim=idim, num_blocks=elayers) # TODO Figure out the setting
+    if pretrained_model_file:
+      self.encoder.load_state_dict(torch.load(pretrained_model_file))
+    self.fc = nn.Linear(embedding_dim, n_class) 
+
+  def forward(self, x, save_features=False):
+    if x.dim() < 3:
+      x.unsqueeze(0)
+
+    embed = self.encoder(x)
+    output = self.fc(embed)
+    if save_features:
+      return embed, output
+    else:
+      return output
 
 class BLSTM2(nn.Module):
   def __init__(self, n_class, embedding_dim=100, n_layers=1, batch_first=True):

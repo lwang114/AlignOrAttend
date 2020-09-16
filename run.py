@@ -69,10 +69,12 @@ test_loader = torch.utils.data.DataLoader(
 # Initialize the image and audio encoders
 if args.audio_model == 'tdnn':
   audio_model = TDNN3(n_class=args.n_phone_class)
-elif args.audio_model == 'lstm': # TODO Load pretrained model
+elif args.audio_model == 'lstm':
   audio_model = BLSTM3(n_class=args.n_phone_class)
   audio_model.load_state_dict(torch.load('/ws/ifp-53_2/hasegawa/lwang114/summer2020/exp/blstm3_mscoco_train_sgd_lr_0.00001_mar25/audio_model.7.pth'))
-# elif args.audio_model == 'transformer': # TODO
+elif args.audio_model == 'transformer': # TODO Add option to specify the pretrained model file
+  audio_model = Transformer(n_class=args.n_phone_class,
+                            pretrained_model_file='/ws/ifp-53_1/hasegawa/tools/espnet/egs/discophone/ifp_lwang114/dump/mscoco/eval/deltafalse/split1utt/data_encoder.pth')
   
 if args.image_model == 'vgg16':
   image_model = VGG16(n_class=args.n_concept_class)
