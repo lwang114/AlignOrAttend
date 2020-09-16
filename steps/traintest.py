@@ -9,7 +9,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 def train(audio_model, image_model, alignment_model, train_loader, test_loader, args):
-    device = torch.device("cuda" if torch.cuda.is_available() and args.device=='gpu' else "cpu")
+    device = torch.device("cuda:1" if torch.cuda.is_available() and args.device=='gpu' else "cpu")
     torch.set_grad_enabled(True)
     # Initialize all of the statistics we want to keep track of
     batch_time = AverageMeter()
@@ -37,12 +37,12 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
         print("  best_epoch = %s" % best_epoch)
         print("  best_acc = %.4f" % best_acc)
 
-    if not isinstance(audio_model, torch.nn.DataParallel):
-        audio_model = nn.DataParallel(audio_model, device_ids=[0]) # XXX
-
-    if not isinstance(image_model, torch.nn.DataParallel):
-        image_model = nn.DataParallel(image_model, device_ids=[0]) # XXX
-
+    if not isinstance(audio_model, torch.nn.DataParallel) and args.device == 'gpu':
+        audio_model = nn.DataParallel(audio_model, device_ids=[device]) # XXX
+            
+    if not isinstance(image_model, torch.nn.DataParallel) and args.device == 'gpu':
+        image_model = nn.DataParallel(image_model, device_ids=[device]) # XXX
+            
     if epoch != 0:
         audio_model.load_state_dict(torch.load("%s/models/audio_model.%d.pth" % (exp_dir, epoch)))
         image_model.load_state_dict(torch.load("%s/models/image_model.%d.pth" % (exp_dir, epoch)))
@@ -93,11 +93,18 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
 
             audio_input = audio_input.to(device)
             image_input = image_input.to(device)
-
+            print(audio_input.size(), image_input.size())
             optimizer.zero_grad()
 
             audio_output = audio_model(audio_input)
-            image_output = image_model(image_input)
+            if len(image_input.size()) >= 5: # Collapse the first two dimensions if image input includes multiple regions per image
+                L = image_input.size(1)
+                image_input = image_input.view(B*L, image_input.size(2), image_input.size(3), image_input.size(4))
+                print(image_input.size)
+                image_output = image_model(image_input)
+                image_output = image_output.view(B, L, -1)
+            else:
+                image_output = image_model(image_input)
 
             pooling_ratio = round(audio_input.size(-1) / audio_output.size(-1))
             if pooling_ratio > 1:
@@ -105,8 +112,9 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
               for b in range(B):
                 segments = np.nonzero(phone_boundary[b].cpu().numpy())[0] // pooling_ratio
                 phone_boundary_down[b, segments] = 1 
-              phone_boundary = torch.tensor(phone_boundary_down, device=device) 
+              phone_boundary = torch.FloatTensor(phone_boundary_down, device=device) 
 
+            print(image_output.size(), audio_output.size())
             loss = -alignment_model(image_output, audio_output, region_mask, phone_boundary)
             loss.backward()
             optimizer.step()
@@ -156,12 +164,12 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
         epoch += 1
 
 def validate(audio_model, image_model, alignment_model, val_loader, args): # TODO
-    device = torch.device("cuda" if torch.cuda.is_available() and args.device=='gpu' else "cpu")
+    device = torch.device("cuda:1" if torch.cuda.is_available() and args.device=='gpu' else "cpu")
     batch_time = AverageMeter()
     if not isinstance(audio_model, torch.nn.DataParallel):
-        audio_model = nn.DataParallel(audio_model)
+        audio_model = nn.DataParallel(audio_model, device_ids=[device])
     if not isinstance(image_model, torch.nn.DataParallel):
-        image_model = nn.DataParallel(image_model)
+        image_model = nn.DataParallel(image_model, device_ids=[device])
     audio_model = audio_model.to(device)
     image_model = image_model.to(device)
     # switch to evaluate mode

@@ -1,5 +1,64 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+class BLSTM2(nn.Module):
+  def __init__(self, n_class, embedding_dim=100, n_layers=1, batch_first=True):
+    super(BLSTM2, self).__init__()
+    self.embedding_dim = embedding_dim
+    self.n_layers = n_layers
+    self.n_class = n_class
+    self.batch_first = batch_first
+    self.rnn = nn.LSTM(input_size=40, hidden_size=embedding_dim, num_layers=n_layers, batch_first=batch_first, bidirectional=True)
+    self.fc = nn.Linear(2 * embedding_dim, n_class)
+    self.softmax = nn.Softmax(dim=1)
+    
+  def forward(self, x, save_features=False):
+    if x.dim() < 3:
+      x.unsqueeze(0)
+
+    B = x.size(0)
+    T = x.size(1) 
+    h0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim))
+    c0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim))
+    embed, _ = self.rnn(x, (h0, c0))
+    outputs = []
+    for b in range(B):
+      # out = self.softmax(self.fc(embed[b]))
+      out = self.fc(embed[b])
+      outputs.append(out)
+
+    if save_features:
+      return embed, torch.stack(outputs, dim=(0 if self.batch_first else 1))
+    else:
+      return torch.stack(outputs, dim=(0 if self.batch_first else 1))
+
+class BLSTM3(nn.Module):
+  def __init__(self, n_class, embedding_dim=100, n_layers=2, layer1_pretrain_file=None, batch_first=True):
+    super(BLSTM3, self).__init__()
+    self.embedding_dim = embedding_dim
+    self.n_layers = n_layers
+    self.n_class = n_class
+    self.batch_first = batch_first
+    self.rnn1 = BLSTM2(n_class, embedding_dim, batch_first=batch_first)
+    if layer1_pretrain_file:
+      self.rnn1.load_state_dict(torch.load(layer1_pretrain_file))
+    self.rnn2 = nn.LSTM(input_size=2*embedding_dim, hidden_size=embedding_dim, num_layers=n_layers, batch_first=batch_first, bidirectional=True)
+    self.fc = nn.Linear(2 * embedding_dim, n_class)
+
+  def forward(self, x, save_features=False):
+    x, _ = self.rnn1(x, save_features=True) 
+    B = x.size(0)
+    T = x.size(1)
+    h0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim))
+    c0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim))
+    embed, _ = self.rnn2(x)
+    outputs = [self.fc(embed[b]) for b in range(B)]
+
+    if save_features:
+      return embed, torch.stack(outputs, dim=(0 if self.batch_first else 1))
+    else:
+      return torch.stack(outputs, dim=(0 if self.batch_first else 1))
 
 class TDNN3(nn.Module):
   def __init__(self, n_class, embedding_dim=128):
@@ -52,6 +111,7 @@ class TDNN3(nn.Module):
     embed = torch.mean(x, -1).squeeze()
     out = self.fc(embed)
     '''
+    print(self.fc1.weight.dtype, self.fc1.bias.dtype)
     embed = F.relu(self.fc1(x))
     out = self.fc2(embed)
 
@@ -59,97 +119,3 @@ class TDNN3(nn.Module):
       return embed, out
     else:
       return out
-
-class BLSTM2(nn.Module):
-  def __init__(self, n_class, embedding_dim=100, n_layers=1):
-    super(BLSTM2, self).__init__()
-    self.embedding_dim = embedding_dim
-    self.n_layers = n_layers
-    self.n_class = n_class
-    # self.i2h = nn.Linear(40 + embedding_dim, embedding_dim)
-    # self.i2o = nn.Linear(40 + embedding_dim, n_class) 
-    self.rnn = nn.LSTM(input_size=40, hidden_size=embedding_dim, num_layers=n_layers, batch_first=True, bidirectional=True)
-    self.fc = nn.Linear(2 * embedding_dim, n_class)
-    self.softmax = nn.Softmax(dim=1)
-
-  def forward(self, x, save_features=False):
-    if x.dim() < 3:
-      x.unsqueeze(0)
-
-    B = x.size(0)
-    T = x.size(1)
-    h0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim))
-    c0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim))
-    if torch.cuda.is_available():
-      h0 = h0.cuda()
-      c0 = c0.cuda()
-       
-    embed, _ = self.rnn(x, (h0, c0))
-    outputs = []
-    for b in range(B):
-      # out = self.softmax(self.fc(embed[b]))
-      out = self.fc(embed[b])
-      outputs.append(out)
-
-    if save_features:
-      return embed, torch.stack(outputs, dim=1)
-    else:
-      return torch.stack(outputs, dim=1)
-
-class BLSTM3(nn.Module):
-  def __init__(self, n_class, embedding_dim=100, n_layers=2, layer1_pretrain_file=None):
-    super(BLSTM3, self).__init__()
-    self.embedding_dim = embedding_dim
-    self.n_layers = n_layers
-    self.n_class = n_class
-    self.rnn1 = BLSTM2(n_class, embedding_dim)
-    if layer1_pretrain_file:
-      self.rnn1.load_state_dict(torch.load(layer1_pretrain_file))
-    self.rnn2 = nn.LSTM(input_size=2*embedding_dim, hidden_size=embedding_dim, num_layers=n_layers, batch_first=True, bidirectional=True)
-    self.fc = nn.Linear(2 * embedding_dim, n_class)
-
-  def forward(self, x, save_features=False):
-    x, _ = self.rnn1(x, save_features=True) 
-    B = x.size(0)
-    T = x.size(1)
-    h0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim))
-    c0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim))
-    embed, _ = self.rnn2(x)
-    outputs = [self.fc(embed[b]) for b in range(B)]
-
-    if save_features:
-      return embed, torch.stack(outputs, dim=1)
-    else:
-      return torch.stack(outputs, dim=1)
-
-class SegmentedLSTM(nn.Module):
-  def __init__(self, n_class, embedding_dim=100, n_layers=1):
-    super(SegmentalLSTM, self).__init__()
-    self.embedding_dim = embedding_dim
-    self.n_layers = n_layers
-    self.n_class = n_class
-    self.rnn = nn.LSTM(input_size=40, hidden_size=embedding_dim, num_layers=n_layers, batch_first=True, bidirectional=True)
-    self.fc = nn.Linear(2 * embedding_dim, n_class)   
-
-  def forward(self, x, save_features=False):
-    if x.dim() < 3:
-      x.unsqueeze(0)
-
-    B = x.size(0)
-    T = x.size(1)
-    h0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim))
-    c0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim))
-    if torch.cuda.is_available():
-      h0 = h0.cuda()
-      c0 = c0.cuda()
-       
-    embed, _ = self.rnn(x, (h0, c0))
-    outputs = []
-    for b in range(B):
-      out = F.log_softmax(self.fc(embed[b]))
-      outputs.append(out)
-
-    if save_features:
-      return embed, torch.stack(outputs, dim=1)
-    else:
-      return torch.stack(outputs, dim=1)   

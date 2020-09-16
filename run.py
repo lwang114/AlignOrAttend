@@ -10,10 +10,10 @@ from dataloaders.image_audio_caption_dataset import ImageAudioCaptionDataset
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--exp_dir', '-e', type=str, help='Experimental directory')
 parser.add_argument('--dataset', choices={'mscoco2k', 'mscoco20k', 'mscoco'})
-parser.add_argument('--audio_model', choices={'lstm'}, default='lstm')
+parser.add_argument('--audio_model', choices={'tdnn', 'lstm'}, default='lstm')
 parser.add_argument('--image_model', choices={'res34', 'vgg16'}, default='res34')
 parser.add_argument('--alignment_model', choices={'mixture_aligner'}, default='mixture_aligner')
-parser.add_argument('--batch_size', '-b', type=int, default=32, help='Batch size')
+parser.add_argument('--batch_size', '-b', type=int, default=16, help='Batch size')
 parser.add_argument('--optim', choices={'sgd', 'adam'}, default='sgd', help='Type of optimizer')
 parser.add_argument('--lr', type=float, default=1e-5, help='Learning rate')
 parser.add_argument('--lr-decay', type=int, default=40, help='Divide the learning rate by 10 every lr_decay epochs')
@@ -67,7 +67,9 @@ test_loader = torch.utils.data.DataLoader(
 )
 
 # Initialize the image and audio encoders
-if args.audio_model == 'lstm': # TODO Load pretrained model
+if args.audio_model == 'tdnn':
+  audio_model = TDNN3(n_class=args.n_phone_class)
+elif args.audio_model == 'lstm': # TODO Load pretrained model
   audio_model = BLSTM3(n_class=args.n_phone_class)
 # elif args.audio_model == 'transformer': # TODO
   

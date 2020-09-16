@@ -28,16 +28,35 @@ class Resnet18(imagemodels.ResNet):
         return x
 
 class Resnet34(imagemodels.ResNet):
-    def __init__(self, embedding_dim=1024, n_class=80, pretrained=False):
+    def __init__(self, n_class=80, pretrained=False):
         super(Resnet34, self).__init__(imagemodels.resnet.BasicBlock, [3, 4, 6, 3])
         if pretrained:
             self.load_state_dict(model_zoo.load_url(imagemodels.resnet.model_urls['resnet34']))
-        self.avgpool = None
-        self.fc = None
-        self.embedder = nn.Sequential(
-                          nn.Conv2d(512, embedding_dim, kernel_size=1, stride=1, padding=0),
-                          nn.Linear(embedding_dim, n_class)
-                        )
+            for child in self.conv1.children():
+                for p in child.parameters():
+                    p.requires_grad = False
+
+            for child in self.layer1.children():
+                for p in child.parameters():
+                    p.requires_grad = False
+
+            for child in self.layer2.children():
+                for p in child.parameters():
+                    p.requires_grad = False
+
+            for child in self.layer3.children():
+                for p in child.parameters():
+                    p.requires_grad = False
+
+            for child in self.layer4.children():
+                for p in child.parameters():
+                    p.requires_grad = False
+
+            for child in list(self.avgpool.children()):
+                for p in child.parameters():
+                    p.requires_grad = False
+            
+        self.fc = nn.Linear(512, n_class)
 
     def forward(self, x):
         x = self.conv1(x)
@@ -48,7 +67,9 @@ class Resnet34(imagemodels.ResNet):
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
-        x = self.embedder(x)
+        x = self.avgpool(x)
+        embed = x.view(x.size(0), -1)
+        x = self.fc(embed)
         return x
 
 class Resnet50(imagemodels.ResNet):

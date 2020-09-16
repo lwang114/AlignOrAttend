@@ -37,7 +37,7 @@ class MixtureAlignmentLogLikelihood(nn.Module):
     log_likelihood = torch.zeros(1, device=src_sent.device, requires_grad=True)
     B = trg_sent.size(0) 
     # Compute p(f_t|y)
-    P_st = torch.tensor(self.P_st, device=src_sent.device)
+    P_st = torch.FloatTensor(self.P_st, device=src_sent.device)
     prob_z_it_given_y = torch.mean(src_sent, axis=1)
     prob_phi_t_given_y = torch.matmul(prob_z_it_given_y, P_st) 
     
@@ -47,7 +47,7 @@ class MixtureAlignmentLogLikelihood(nn.Module):
       src_sent = self.softmax(src_sent)
       trg_sent = self.softmax(trg_sent)
 
-    EPStensor = torch.tensor(EPS*np.ones(B), device=src_sent.device)
+    EPStensor = torch.FloatTensor(EPS*np.ones(B), device=src_sent.device)
     print(torch.sum(prob_phi_t_given_y.unsqueeze(1) * trg_sent, axis=(1, 2)).size(), EPStensor.size())
     log_likelihood = torch.sum(torch.log(torch.max(torch.matmul(trg_sent, prob_phi_t_given_y.unsqueeze(-1)), EPStensor)))
     return log_likelihood
@@ -218,7 +218,7 @@ class MixtureAlignmentLogLikelihood(nn.Module):
       for t, (start, end) in enumerate(zip(segmentation[:-1], segmentation[1:])):
         mask[b, t, start:end] = 1. / max(end - start, 1)
     
-    mask = torch.tensor(mask, device=src_sent.device)
+    mask = torch.FloatTensor(mask, device=trg_sent.device)
     trg_embeddings = torch.matmul(mask, trg_sent) # Compute target embeddings 
     return trg_embeddings, torch.sum(mask, axis=-1)
   
@@ -262,10 +262,10 @@ class MarkovAlignmentLogLikelihood(nn.Module):
     trg_sent_slices = np.split(trg_sent, 1, dim=1) # Split trg_sent into T slices of [p(f_t|x_t) for b in range(B)]  
 
     # TODO Handle end of sentences of different lengths + handle different transition probs for different length
-    forward_prob = torch.tensor(self.init, device=src_sent.device).unsqueeze(-1) * src_sent
-    A_diag = torch.tensor(np.diag(np.diag(self.A)), device=src_sent.device)
-    A_offdiag = torch.tensor(A - np.diag(np.diag(self.A)), device=src_sent.device) 
-    P_st = torch.tensor(self.P_st, device=src_sent.device)
+    forward_prob = torch.FloatTensor(self.init, device=src_sent.device).unsqueeze(-1) * src_sent
+    A_diag = torch.FloatTensor(np.diag(np.diag(self.A)), device=src_sent.device)
+    A_offdiag = torch.FloatTensor(A - np.diag(np.diag(self.A)), device=src_sent.device) 
+    P_st = torch.FloatTensor(self.P_st, device=src_sent.device)
     for t in range(self.T_max): # Compute [p(i_t=i, z_i=k, x_1:t|y) for b in range(B)]
       prob_x_t_given_y = torch.dot(trg_sent_slices[t], P_st.T).unsqueeze(1)
       prob_x_t_z_given_y = src_sent * prob_x_t_given_y
@@ -273,7 +273,7 @@ class MarkovAlignmentLogLikelihood(nn.Module):
       offdiag_term = torch.matmul(A_offdiag.T, torch.sum(forward_prob, axis=-1)) * prob_x_t_z_given_y 
       forward_prob = diag_term + offdiag_term
     
-    EPStensor = torch.tensor(EPS*np.ones(B), device=src_sent.device)
+    EPStensor = torch.FloatTensor(EPS*np.ones(B), device=src_sent.device)
     log_likelihood = torch.sum(torch.log(torch.max(torch.sum(forward_prob, axis=(1, 2)), EPStensor))) 
 
     return log_likelihood
@@ -428,7 +428,7 @@ class MarkovAlignmentLogLikelihood(nn.Module):
         segmentation = np.append(0, segmentation)
       for t, (start, end) in enumerate(zip(segmentation[:-1], segmentation[1:])):
         mask[b, t, start:end] = 1. / max(end - start, 1)
-    mask = torch.tensor(mask, device=src_sent.device)
+    mask = torch.FloatTensor(mask, device=src_sent.device)
     
     trg_embeddings = torch.matmul(mask, trg_sent) # Compute target embeddings 
     return trg_embeddings, torch.sum(mask, axis=-1)
@@ -518,10 +518,10 @@ if __name__ == '__main__':
   
   device = 'cuda' if torch.cuda.is_available() else 'cpu'
   print(device)
-  src_sent = torch.tensor(src_sent_arr, device=device)
-  trg_sent = torch.tensor(trg_sent_arr, device=device)
-  src_boundary = torch.tensor(src_boundary, device=device)
-  trg_boundary = torch.tensor(trg_boundary, device=device)
+  src_sent = torch.FloatTensor(src_sent_arr, device=device)
+  trg_sent = torch.FloatTensor(trg_sent_arr, device=device)
+  src_boundary = torch.FloatTensor(src_boundary, device=device)
+  trg_boundary = torch.FloatTensor(trg_boundary, device=device)
 
   log_likelihood = MixtureAlignmentLogLikelihood(configs={'compute_softmax': False, 'Kt': 65})
   n_iter = 20
