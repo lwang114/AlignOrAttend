@@ -37,14 +37,14 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
         print("  best_epoch = %s" % best_epoch)
         print("  best_acc = %.4f" % best_acc)
 
-    if not isinstance(audio_model, torch.nn.DataParallel) and args.device == 'gpu':
-        audio_model = nn.DataParallel(audio_model, device_ids=[device]) # XXX
+    # if not isinstance(audio_model, torch.nn.DataParallel) and args.device == 'gpu':
+    #     audio_model = nn.DataParallel(audio_model, device_ids=[device]) # XXX
             
-    if not isinstance(image_model, torch.nn.DataParallel) and args.device == 'gpu':
-        image_model = nn.DataParallel(image_model, device_ids=[device]) # XXX
+    # if not isinstance(image_model, torch.nn.DataParallel) and args.device == 'gpu':
+    #     image_model = nn.DataParallel(image_model, device_ids=[device]) # XXX
 
-    if not isinstance(alignment_model, torch.nn.DataParallel) and args.device == 'gpu':
-        alignment_model = nn.DataParallel(alignment_model, device_ids=[device]) # XXX
+    # if not isinstance(alignment_model, torch.nn.DataParallel) and args.device == 'gpu':
+    #     alignment_model = nn.DataParallel(alignment_model, device_ids=[device]) # XXX
         
     if epoch != 0:
         audio_model.load_state_dict(torch.load("%s/models/audio_model.%d.pth" % (exp_dir, epoch)))
@@ -54,6 +54,7 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
     audio_model = audio_model.to(device)
     image_model = image_model.to(device)
     alignment_model = alignment_model.to(device)
+
     # Set up the optimizer
     audio_trainables = [p for p in audio_model.parameters() if p.requires_grad]
     image_trainables = [p for p in image_model.parameters() if p.requires_grad]
@@ -114,7 +115,7 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
               for b in range(B):
                 segments = np.nonzero(phone_boundary[b].cpu().numpy())[0] // pooling_ratio
                 phone_boundary_down[b, segments] = 1 
-              phone_boundary = torch.FloatTensor(phone_boundary_down, device=device) 
+              phone_boundary = torch.FloatTensor(phone_boundary_down).to(device=device) 
 
             loss = -alignment_model(image_output, audio_output, region_mask, phone_boundary)
             loss.backward()

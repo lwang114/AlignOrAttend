@@ -10,7 +10,7 @@ from dataloaders.image_audio_caption_dataset import ImageAudioCaptionDataset
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--exp_dir', '-e', type=str, help='Experimental directory')
 parser.add_argument('--dataset', choices={'mscoco2k', 'mscoco20k', 'mscoco'})
-parser.add_argument('--audio_model', choices={'tdnn', 'lstm'}, default='lstm')
+parser.add_argument('--audio_model', choices={'lstm', 'tdnn', 'transformer'}, default='lstm')
 parser.add_argument('--image_model', choices={'res34', 'vgg16'}, default='res34')
 parser.add_argument('--alignment_model', choices={'mixture_aligner'}, default='mixture_aligner')
 parser.add_argument('--batch_size', '-b', type=int, default=16, help='Batch size')
@@ -55,14 +55,18 @@ else:
   with open('data/{}_path.json'.format(args.dataset), 'r') as f:
     path = json.load(f) 
 
+configs = {}
+if args.audio_model == 'transformer':
+  configs = {'n_mfcc': 83}
+  
 # Set up the dataloaders  
 train_loader = torch.utils.data.DataLoader(
-  ImageAudioCaptionDataset(path['audio_root_path_train'], path['image_root_path_train'], path['segment_file_train'], path['bbox_file_train'], configs={}),
+  ImageAudioCaptionDataset(path['audio_root_path_train'], path['image_root_path_train'], path['segment_file_train'], path['bbox_file_train'], configs=configs),
   batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True
 )
 
 test_loader = torch.utils.data.DataLoader(  
-  ImageAudioCaptionDataset(path['audio_root_path_test'], path['image_root_path_test'], path['segment_file_test'], path['bbox_file_test'], configs={}),
+  ImageAudioCaptionDataset(path['audio_root_path_test'], path['image_root_path_test'], path['segment_file_test'], path['bbox_file_test'], configs=configs),
   batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True
 )
 
@@ -73,8 +77,8 @@ elif args.audio_model == 'lstm':
   audio_model = BLSTM3(n_class=args.n_phone_class)
   audio_model.load_state_dict(torch.load('/ws/ifp-53_2/hasegawa/lwang114/summer2020/exp/blstm3_mscoco_train_sgd_lr_0.00001_mar25/audio_model.7.pth'))
 elif args.audio_model == 'transformer': # TODO Add option to specify the pretrained model file
-  audio_model = Transformer(n_class=args.n_phone_class,
-                            pretrained_model_file='/ws/ifp-53_1/hasegawa/tools/espnet/egs/discophone/ifp_lwang114/dump/mscoco/eval/deltafalse/split1utt/data_encoder.pth')
+  audio_model = Transformer(n_class=args.n_phone_class)
+  #                          pretrained_model_file='/ws/ifp-53_1/hasegawa/tools/espnet/egs/discophone/ifp_lwang114/dump/mscoco/eval/deltafalse/split1utt/data_encoder.pth')
   
 if args.image_model == 'vgg16':
   image_model = VGG16(n_class=args.n_concept_class)

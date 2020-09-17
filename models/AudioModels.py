@@ -2,10 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from espnet.nets.pytorch_backend.transformer.encoder import Encoder
+from espnet.nets.pytorch_backend.nets_utils import make_non_pad_mask
 
 class Transformer(nn.Module):
   def __init__(self, n_class,
-               embedding_dim=256,
                pretrained_model_file=None,
                model_conf_file=None,
                feat_conf_file=None):
@@ -17,18 +17,33 @@ class Transformer(nn.Module):
         model_conf = yaml.safe_load(fm)
         feat_conf = yaml.safe_load(ff)
       
-    idim = feat_conf.get('ndim', 80)
-    num_blocks = model_conf.get('elayers', 12)
-    self.encoder = Encoder(idim=idim, num_blocks=elayers) # TODO Figure out the setting
+    idim = feat_conf.get('ndim', 83)
+    num_blocks = model_conf.get('elayers', 6)
+    # input_layer = model_conf.get('input_layer', 'embed')
+    linear_units = model_conf.get('eunits', 2048)
+    attention_dim = model_conf.get('adim', 256)
+    attention_heads = model_conf.get('aheads', 4)
+    embedding_dim= model_conf.get('adim', 256)
+    
+    self.encoder = Encoder(idim=idim,
+                           attention_dim=attention_dim,
+                           attention_heads=attention_heads,
+                           linear_units=linear_units,
+                           input_layer = 'conv2d',
+                           num_blocks=num_blocks) # TODO Figure out the setting
+    for k in self.encoder.state_dict():
+      print(k, self.encoder.state_dict()[k].size())
+    
     if pretrained_model_file:
       self.encoder.load_state_dict(torch.load(pretrained_model_file))
     self.fc = nn.Linear(embedding_dim, n_class) 
 
   def forward(self, x, save_features=False):
     if x.dim() < 3:
-      x.unsqueeze(0)
+      x = x.unsqueeze(0)
 
-    embed = self.encoder(x)
+    masks = make_non_pad_mask([x.size(1)]*x.size(0)).to(x.device).unsqueeze(-2)
+    embed, _ = self.encoder(x, masks)
     output = self.fc(embed)
     if save_features:
       return embed, output
@@ -48,7 +63,7 @@ class BLSTM2(nn.Module):
     
   def forward(self, x, save_features=False):
     if x.dim() < 3:
-      x.unsqueeze(0)
+      x = x.unsqueeze(0)
 
     B = x.size(0)
     T = x.size(1)
