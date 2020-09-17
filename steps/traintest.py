@@ -98,6 +98,8 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
 
             audio_input = audio_input.to(device)
             image_input = image_input.to(device)
+            phone_boundary = phone_boundary.to(device)
+            region_mask = region_mask.to(device)
             optimizer.zero_grad()
 
             audio_output = audio_model(audio_input)
@@ -191,9 +193,17 @@ def validate(audio_model, image_model, alignment_model, val_loader, args): # TOD
             B = image_input.size(0)
             image_input = image_input.to(device)
             audio_input = audio_input.to(device)
+            phone_boundary = phone_boundary.to(device)
+            region_mask = region_mask.to(device)
 
             # compute output
-            image_output = image_model(image_input)
+            if len(image_input.size()) >= 5: # Collapse the first two dimensions if image input includes multiple regions per image
+                L = image_input.size(1)
+                image_input = image_input.view(B*L, image_input.size(2), image_input.size(3), image_input.size(4))
+                image_output = image_model(image_input)
+                image_output = image_output.view(B, L, -1)
+            else:
+                image_output = image_model(image_input)
             audio_output = audio_model(audio_input)
 
             image_output = image_output.cpu().detach()

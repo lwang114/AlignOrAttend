@@ -112,7 +112,9 @@ class ImageAudioCaptionDataset(Dataset):
       start_frame, end_frame = int(start_ms / 10), int(end_ms / 10)
       if end_frame > self.max_nframes:
         break
-      phone_boundary[start_frame] = 1
+
+      if start_frame != 0:
+          phone_boundary[start_frame] = 1
       phone_boundary[end_frame] = 1
 
     audio_filename = '{}.wav'.format(self.audio_keys[idx])

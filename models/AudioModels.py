@@ -18,8 +18,8 @@ class Transformer(nn.Module):
         feat_conf = yaml.safe_load(ff)
       
     idim = feat_conf.get('ndim', 83)
-    num_blocks = model_conf.get('elayers', 6)
-    # input_layer = model_conf.get('input_layer', 'embed')
+    num_blocks = model_conf.get('elayers', 12)
+    input_layer = model_conf.get('input_layer', 'conv2d')
     linear_units = model_conf.get('eunits', 2048)
     attention_dim = model_conf.get('adim', 256)
     attention_heads = model_conf.get('aheads', 4)
@@ -29,8 +29,8 @@ class Transformer(nn.Module):
                            attention_dim=attention_dim,
                            attention_heads=attention_heads,
                            linear_units=linear_units,
-                           input_layer = 'conv2d',
-                           num_blocks=num_blocks) # TODO Figure out the setting
+                           input_layer=input_layer ,
+                           num_blocks=num_blocks)
     for k in self.encoder.state_dict():
       print(k, self.encoder.state_dict()[k].size())
     
