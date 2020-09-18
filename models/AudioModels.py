@@ -31,8 +31,8 @@ class Transformer(nn.Module):
                            linear_units=linear_units,
                            input_layer=input_layer ,
                            num_blocks=num_blocks)
-    for k in self.encoder.state_dict():
-      print(k, self.encoder.state_dict()[k].size())
+    # for k in self.encoder.state_dict():
+    #   print(k, self.encoder.state_dict()[k].size())
     
     if pretrained_model_file:
       self.encoder.load_state_dict(torch.load(pretrained_model_file))

@@ -30,11 +30,11 @@ parser.add_argument('--device', choices={'gpu', 'cpu'}, default='gpu', help='Dev
 args = parser.parse_args()
 
 # Load the data paths
-if not os.path.isdir('exp'):
-  os.mkdir('exp')
 if not os.path.isdir('data'):
   os.mkdir('data')
-
+if not os.path.isdir(args.exp_dir):
+  os.mkdir(args.exp_dir)
+  
 if not os.path.isfile('data/{}_path.json'.format(args.dataset)):
   with open('data/{}_path.json'.format(args.dataset), 'w') as f:
     root = '/ws/ifp-53_2/hasegawa/lwang114/data/mscoco/'

@@ -6,6 +6,7 @@ import numpy as np
 import pickle
 from .util import *
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 def train(audio_model, image_model, alignment_model, train_loader, test_loader, args):
@@ -124,19 +125,19 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
             optimizer.step()
 
             # record loss
-            loss_meter.update(loss.item(), B) # TODO
-            batch_time.update(time.time() - end_time) # TODO
+            loss_meter.update(loss.item(), B)
+            batch_time.update(time.time() - end_time)
 
             if global_step % args.n_print_steps == 0 and global_step != 0:
                 print('Epoch: [{0}][{1}/{2}]\t'
-                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                      'Time {batch_time.val:.3f}s ({batch_time.avg:.3f}s)\t'
+                      'Data {data_time.val:.3f}s ({data_time.avg:.3f}s)\t'
                   'Loss total {loss_meter.val:.4f} ({loss_meter.avg:.4f})'.format(
                    epoch, i, len(train_loader), batch_time=batch_time,
                    data_time=data_time, loss_meter=loss_meter))
                 logger.info('Epoch: [{0}][{1}/{2}]\t'
-                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                            'Time {batch_time.val:.3f}s ({batch_time.avg:.3f}s)\t'
+                            'Data {data_time.val:.3f}s ({data_time.avg:.3f}s)\t'
                   'Loss total {loss_meter.val:.4f} ({loss_meter.avg:.4f})'.format(
                    epoch, i, len(train_loader), batch_time=batch_time,
                    data_time=data_time, loss_meter=loss_meter))
@@ -152,22 +153,22 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
         avg_acc = (recalls['A_r10'] + recalls['I_r10']) / 2
 
         torch.save(audio_model.state_dict(),
-                "%s/models/audio_model.%d.pth" % (exp_dir, epoch))
+                "%s/audio_model.%d.pth" % (exp_dir, epoch))
         torch.save(image_model.state_dict(),
-                "%s/models/image_model.%d.pth" % (exp_dir, epoch))
-        torch.save(optimizer.state_dict(), "%s/models/optim_state.%d.pth" % (exp_dir, epoch))
+                "%s/image_model.%d.pth" % (exp_dir, epoch))
+        torch.save(optimizer.state_dict(), "%s/optim_state.%d.pth" % (exp_dir, epoch))
         
         if avg_acc > best_acc:
             best_epoch = epoch
             best_acc = avg_acc
-            shutil.copyfile("%s/models/audio_model.%d.pth" % (exp_dir, epoch), 
-                "%s/models/best_audio_model.pth" % (exp_dir))
-            shutil.copyfile("%s/models/image_model.%d.pth" % (exp_dir, epoch), 
-                "%s/models/best_image_model.pth" % (exp_dir))
+            shutil.copyfile("%s/audio_model.%d.pth" % (exp_dir, epoch), 
+                "%s/best_audio_model.pth" % (exp_dir))
+            shutil.copyfile("%s/image_model.%d.pth" % (exp_dir, epoch), 
+                "%s/best_image_model.pth" % (exp_dir))
         _save_progress()
         epoch += 1
 
-def validate(audio_model, image_model, alignment_model, val_loader, args): # TODO
+def validate(audio_model, image_model, alignment_model, val_loader, args):
     device = torch.device("cuda:1" if torch.cuda.is_available() and args.device=='gpu' else "cpu")
     batch_time = AverageMeter()
     if not isinstance(audio_model, torch.nn.DataParallel):
@@ -213,7 +214,7 @@ def validate(audio_model, image_model, alignment_model, val_loader, args): # TOD
             A_embeddings.append(audio_output)
             region_masks.append(region_mask)
             phone_boundaries.append(phone_boundary)
-
+            
             pooling_ratio = round(audio_input.size(-1) / audio_output.size(-1))
             # Downsample the phone boundary according to the pooling ratio
             if pooling_ratio > 1:
@@ -226,8 +227,8 @@ def validate(audio_model, image_model, alignment_model, val_loader, args): # TOD
             alignments, clusters, _, _ = alignment_model.discover(image_output, audio_output, region_mask, phone_boundary)
             for b, (alignment, cluster) in enumerate(zip(alignments, clusters)):
               align_results.append({'index': i*B+b,
-                                    'alignment': alignment,
-                                    'image_concepts': cluster})
+                                    'alignment': alignment.tolist(),
+                                    'image_concepts': cluster.tolist()})
             batch_time.update(time.time() - end)
             end = time.time()
 
@@ -235,7 +236,6 @@ def validate(audio_model, image_model, alignment_model, val_loader, args): # TOD
         audio_output = torch.cat(A_embeddings)
         region_masks = torch.cat(region_masks)
         phone_boundaries = torch.cat(phone_boundaries)
-
         recalls = calc_recalls(image_output, audio_output, region_masks, phone_boundaries, alignment_model)
         A_r10 = recalls['A_r10']
         I_r10 = recalls['I_r10']
@@ -259,6 +259,6 @@ def validate(audio_model, image_model, alignment_model, val_loader, args): # TOD
     logger.info(' * Audio R@1 {A_r1:.3f} Image R@1 {I_r1:.3f} over {N:d} validation pairs'
           .format(A_r1=A_r1, I_r1=I_r1, N=N_examples))
 
-    with open('{}/alignment.json', 'w') as f:
+    with open('{}/alignment.json'.format(args.exp_dir), 'w') as f:
       json.dump(align_results, f, indent=4, sort_keys=True)
     return recalls

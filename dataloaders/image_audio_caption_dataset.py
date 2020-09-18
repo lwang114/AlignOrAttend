@@ -47,6 +47,8 @@ class ImageAudioCaptionDataset(Dataset):
                   segmentation.append([cur_start, cur_start+dur])
                   cur_start += dur
           self.segmentations.append(segmentation)
+          if len(self.segmentations) > 30: # XXX
+              break
       else:
         for line in f:
           k, phn, start, end = line.strip().split()
@@ -72,6 +74,8 @@ class ImageAudioCaptionDataset(Dataset):
                 image_file_prefix = ':'.join(image_list)
                 self.image_keys.append(image_file_prefix)
                 self.bboxes.append([bbox_dict[img_id] for img_id in image_list])
+                if len(self.bboxes) > 30: # XXX
+                    break
     else:    
       with open(bbox_file, 'r') as f:
           for line in f:
@@ -86,6 +90,7 @@ class ImageAudioCaptionDataset(Dataset):
               else:
                   self.bboxes[-1].append([x, y, w, h])
 
+                  
   def __getitem__(self, idx):
     if torch.is_tensor(idx):
       idx = idx.tolist()

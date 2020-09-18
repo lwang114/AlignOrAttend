@@ -11,10 +11,11 @@ def calc_recalls(image_outputs, audio_outputs, region_masks, phone_boundaries, a
     n = image_outputs.size(0)
     S = np.zeros((n, n)) 
     for i in range(n):
-      cur_audio_outputs = torch.cat([audio_outputs[i] for j in range(n)])
-      cur_phone_boundaries = torch.cat([phone_boundaries[i] for j in range(n)])
-      _, S[i] = alignment_model.discover(image_outputs, cur_audio_outputs, region_masks, cur_phone_boundaries)
-     
+      cur_audio_outputs = torch.cat([audio_outputs[i].unsqueeze(0) for j in range(n)])
+      cur_phone_boundaries = torch.cat([phone_boundaries[i].unsqueeze(0) for j in range(n)])
+      _, _, S[i], _ = alignment_model.discover(image_outputs, cur_audio_outputs, region_masks, cur_phone_boundaries)
+
+    S = torch.FloatTensor(S)
     A2I_scores, A2I_ind = S.topk(10, 0)
     I2A_scores, I2A_ind = S.topk(10, 1)
     A_r1 = AverageMeter()

@@ -171,7 +171,6 @@ class MixtureAlignmentLogLikelihood(nn.Module):
       src_sent = src_sent.unsqueeze(0)
       trg_sent = trg_sent.unsqueeze(0)
     B = src_sent.size(0)
-
     trg_sent, trg_boundary = self.embed(trg_sent, trg_boundary)
     if self.compute_softmax:
       src_sent = self.softmax(src_sent)
@@ -180,8 +179,8 @@ class MixtureAlignmentLogLikelihood(nn.Module):
     src_sent = src_sent.cpu().numpy()
     trg_sent = trg_sent.cpu().numpy()
 
-    Ls = torch.sum(src_boundary, axis=-1) 
-    Ts = torch.sum(trg_boundary, axis=-1)
+    Ls = torch.sum(src_boundary, axis=-1).cpu().numpy().astype(int) 
+    Ts = torch.sum(trg_boundary, axis=-1).cpu().numpy().astype(int)
 
     # Find the optimal alignments and cluster assignment
     alignments = []
@@ -189,11 +188,11 @@ class MixtureAlignmentLogLikelihood(nn.Module):
     clusters = []
     cluster_probs = []
     for b in range(B):
-      L = self.Ls[b]
-      T = self.Ts[b]
+      L = Ls[b]
+      T = Ts[b]
       V_src = src_sent[b]
       V_trg = trg_sent[b]
-      P_a = V_src @ self.P_st @ V_src
+      P_a = V_src @ self.P_st @ V_trg.T
       alignment = np.argmax(P_a, axis=0)[:T]
       align_prob = np.prod(np.max(P_a[:T], axis=0))
       cluster_prob = deepcopy(V_src)
@@ -208,7 +207,6 @@ class MixtureAlignmentLogLikelihood(nn.Module):
 
     return alignments, clusters, align_probs, cluster_probs
 
-
   def reset(self):
     self.C_st[:] = 0.
  
@@ -217,7 +215,7 @@ class MixtureAlignmentLogLikelihood(nn.Module):
     B = trg_sent.size(0) 
 
     mask = np.zeros((B, self.T_max, nframes))
-    for b in range(B): # Compute embedding mask 
+    for b in range(B): # Compute embedding mask
       segmentation = np.nonzero(trg_boundary[b].cpu().numpy())[0]
       if segmentation[0] != 0:
         segmentation = np.append(0, segmentation)
