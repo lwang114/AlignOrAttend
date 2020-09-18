@@ -148,23 +148,24 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
             end_time = time.time()
             global_step += 1
 
-        recalls = validate(audio_model, image_model, alignment_model, test_loader, args)
-        
-        avg_acc = (recalls['A_r10'] + recalls['I_r10']) / 2
-
         torch.save(audio_model.state_dict(),
                 "%s/audio_model.%d.pth" % (exp_dir, epoch))
         torch.save(image_model.state_dict(),
                 "%s/image_model.%d.pth" % (exp_dir, epoch))
         torch.save(optimizer.state_dict(), "%s/optim_state.%d.pth" % (exp_dir, epoch))
+
+        if (epoch + 1) % 10 == 0:
+            recalls = validate(audio_model, image_model, alignment_model, test_loader, args)
         
-        if avg_acc > best_acc:
-            best_epoch = epoch
-            best_acc = avg_acc
-            shutil.copyfile("%s/audio_model.%d.pth" % (exp_dir, epoch), 
-                "%s/best_audio_model.pth" % (exp_dir))
-            shutil.copyfile("%s/image_model.%d.pth" % (exp_dir, epoch), 
-                "%s/best_image_model.pth" % (exp_dir))
+            avg_acc = (recalls['A_r10'] + recalls['I_r10']) / 2
+        
+            if avg_acc > best_acc:
+                best_epoch = epoch
+                best_acc = avg_acc
+                shutil.copyfile("%s/audio_model.%d.pth" % (exp_dir, epoch), 
+                                "%s/best_audio_model.pth" % (exp_dir))
+                shutil.copyfile("%s/image_model.%d.pth" % (exp_dir, epoch), 
+                                "%s/best_image_model.pth" % (exp_dir))
         _save_progress()
         epoch += 1
 

@@ -35,7 +35,7 @@ class ImageAudioCaptionDataset(Dataset):
 
     if self.audio_root_path.split('.')[-1] == 'json': # Assume kaldi format if audio_root_path is a json file
         with open(audio_root_path, 'r') as f:
-            audio_feat_dict = json.load(f)
+            audio_feat_dict = json.load(f)['utts']
             
     # Load phone segments
     with open(segment_file, 'r') as f:
@@ -44,7 +44,9 @@ class ImageAudioCaptionDataset(Dataset):
         for k in sorted(segment_dicts, key=lambda x:int(x.split('_')[-1])):
           audio_file_prefix = '_'.join('_'.join(word_segment_dict[1].split('_')[:-1]) for word_segment_dict in segment_dicts[k]['data_ids'])
           if self.audio_root_path.split('.')[-1] == 'json':
-              self.audio_keys.append(audio_feat_dict['input'][0]['feat'])
+              k_expanded = '{}_{:06d}'.format('_'.join(k.split('_')[:-1]), int(k.split('_')[-1]))
+              self.audio_keys.append(audio_feat_dict[k_expanded]['input'][0]['feat'])
+              
           else:
               self.audio_keys.append(audio_file_prefix)
           segmentation = []
@@ -56,7 +58,7 @@ class ImageAudioCaptionDataset(Dataset):
                   cur_start += dur
           self.segmentations.append(segmentation)
           # if len(self.segmentations) > 30: # XXX
-          #     break
+          #   break
       else:
         for line in f:
           k, phn, start, end = line.strip().split()
@@ -132,6 +134,7 @@ class ImageAudioCaptionDataset(Dataset):
 
     if self.audio_root_path.split('.')[-1] == 'json': # Assume kaldi format if audio_root_path is a json file
         mfcc = kaldiio.load_mat(self.audio_keys[idx])
+        mfcc = self.convert_to_fixed_length(mfcc.T).T
     else:
         audio_filename = '{}.wav'.format(self.audio_keys[idx])
         try:

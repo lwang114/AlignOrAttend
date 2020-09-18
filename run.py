@@ -38,13 +38,13 @@ if not os.path.isdir(args.exp_dir):
 if not os.path.isfile('data/{}_path.json'.format(args.dataset)):
   with open('data/{}_path.json'.format(args.dataset), 'w') as f:
     root = '/ws/ifp-53_2/hasegawa/lwang114/data/mscoco/'
-    kaldi_root = '/ws/ifp-53_2/hasegawa/tools/espnet/egs/discophone/ifp_lwang114/'
+    kaldi_root = '/ws/ifp-53_1/hasegawa/tools/espnet/egs/discophone/ifp_lwang114/'
     if args.dataset == 'mscoco2k':
       path = {'root': root,
               'audio_root_path_train':'{}/mscoco2k/wav/'.format(root),
               'audio_root_path_test':'{}/mscoco2k/wav/'.format(root),
               'audio_root_path_train_kaldi':'{}/dump/train/deltafalse/data.json'.format(kaldi_root),
-              'audio_root_path_test_kaldi':'{}/dump/test/deltafalse/data.json'.format(kaldi_root),
+              'audio_root_path_test_kaldi':'{}/dump/dev/deltafalse/data.json'.format(kaldi_root),
               'segment_file_train':'{}/mscoco2k/{}_phone_info.json'.format(root, args.dataset),
               'segment_file_test':'{}/mscoco2k/{}_phone_info.json'.format(root, args.dataset),
               'image_root_path_train':'{}/val2014/imgs/val2014/'.format(root),
