@@ -6,6 +6,7 @@ from torchvision import transforms
 from sphfile import SPHFile
 import scipy.io.wavfile as wavfile
 import librosa
+import kaldiio
 from PIL import Image
 
 EPS = 1e-9
@@ -32,13 +33,20 @@ class ImageAudioCaptionDataset(Dataset):
     self.image_root_path = image_root_path 
     self.bboxes = []
 
+    if self.audio_root_path.split('.')[-1] == 'json': # Assume kaldi format if audio_root_path is a json file
+        with open(audio_root_path, 'r') as f:
+            audio_feat_dict = json.load(f)
+            
     # Load phone segments
     with open(segment_file, 'r') as f:
       if segment_file.split('.')[-1] == 'json':
         segment_dicts = json.load(f)
         for k in sorted(segment_dicts, key=lambda x:int(x.split('_')[-1])):
           audio_file_prefix = '_'.join('_'.join(word_segment_dict[1].split('_')[:-1]) for word_segment_dict in segment_dicts[k]['data_ids'])
-          self.audio_keys.append(audio_file_prefix)
+          if self.audio_root_path.split('.')[-1] == 'json':
+              self.audio_keys.append(audio_feat_dict['input'][0]['feat'])
+          else:
+              self.audio_keys.append(audio_file_prefix)
           segmentation = []
           cur_start = 0
           for word_segment_dict in segment_dicts[k]['data_ids']:
@@ -47,8 +55,8 @@ class ImageAudioCaptionDataset(Dataset):
                   segmentation.append([cur_start, cur_start+dur])
                   cur_start += dur
           self.segmentations.append(segmentation)
-          if len(self.segmentations) > 30: # XXX
-              break
+          # if len(self.segmentations) > 30: # XXX
+          #     break
       else:
         for line in f:
           k, phn, start, end = line.strip().split()
@@ -74,8 +82,8 @@ class ImageAudioCaptionDataset(Dataset):
                 image_file_prefix = ':'.join(image_list)
                 self.image_keys.append(image_file_prefix)
                 self.bboxes.append([bbox_dict[img_id] for img_id in image_list])
-                if len(self.bboxes) > 30: # XXX
-                    break
+                # if len(self.bboxes) > 30: # XXX
+                #     break
     else:    
       with open(bbox_file, 'r') as f:
           for line in f:
@@ -122,25 +130,28 @@ class ImageAudioCaptionDataset(Dataset):
           phone_boundary[start_frame] = 1
       phone_boundary[end_frame] = 1
 
-    audio_filename = '{}.wav'.format(self.audio_keys[idx])
-    try:
-        sr, y_wav = wavfile.read('{}/{}'.format(self.audio_root_path, audio_filename))
-    except:
-        if audio_filename.split('.')[-1] == 'wav':
-            audio_filename_sph = '.'.join(audio_filename.split('.')[:-1]+['WAV'])
-            sph = SPHFile(self.audio_root_path + audio_filename_sph)
-            sph.write_wav(self.audio_root_path + audio_filename)
-        sr, y_wav = wavfile.read(self.audio_root_path + audio_filename)
+    if self.audio_root_path.split('.')[-1] == 'json': # Assume kaldi format if audio_root_path is a json file
+        mfcc = kaldiio.load_mat(self.audio_keys[idx])
+    else:
+        audio_filename = '{}.wav'.format(self.audio_keys[idx])
+        try:
+            sr, y_wav = wavfile.read('{}/{}'.format(self.audio_root_path, audio_filename))
+        except:
+            if audio_filename.split('.')[-1] == 'wav':
+                audio_filename_sph = '.'.join(audio_filename.split('.')[:-1]+['WAV'])
+                sph = SPHFile(self.audio_root_path + audio_filename_sph)
+                sph.write_wav(self.audio_root_path + audio_filename)
+            sr, y_wav = wavfile.read(self.audio_root_path + audio_filename)
     
-    y_wav = preemphasis(y_wav, self.coeff) 
-    n_fft = int(self.window_ms * sr / 1000)
-    hop_length = int(self.skip_ms * sr / 1000)
-    mfcc = librosa.feature.mfcc(y_wav, sr=sr, n_mfcc=self.n_mfcc, dct_type=self.dct_type, n_fft=n_fft, hop_length=hop_length)
-    mfcc -= np.mean(mfcc)
-    mfcc /= max(np.sqrt(np.var(mfcc)), EPS)
-    nframes = min(mfcc.shape[1], self.max_nframes)
-    mfcc = self.convert_to_fixed_length(mfcc)
-    mfcc = mfcc.T
+        y_wav = preemphasis(y_wav, self.coeff) 
+        n_fft = int(self.window_ms * sr / 1000)
+        hop_length = int(self.skip_ms * sr / 1000)
+        mfcc = librosa.feature.mfcc(y_wav, sr=sr, n_mfcc=self.n_mfcc, dct_type=self.dct_type, n_fft=n_fft, hop_length=hop_length)
+        mfcc -= np.mean(mfcc)
+        mfcc /= max(np.sqrt(np.var(mfcc)), EPS)
+        nframes = min(mfcc.shape[1], self.max_nframes)
+        mfcc = self.convert_to_fixed_length(mfcc)
+        mfcc = mfcc.T
       
     # Extract visual features 
     regions = []

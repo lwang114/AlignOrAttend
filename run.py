@@ -38,10 +38,13 @@ if not os.path.isdir(args.exp_dir):
 if not os.path.isfile('data/{}_path.json'.format(args.dataset)):
   with open('data/{}_path.json'.format(args.dataset), 'w') as f:
     root = '/ws/ifp-53_2/hasegawa/lwang114/data/mscoco/'
+    kaldi_root = '/ws/ifp-53_2/hasegawa/tools/espnet/egs/discophone/ifp_lwang114/'
     if args.dataset == 'mscoco2k':
       path = {'root': root,
               'audio_root_path_train':'{}/mscoco2k/wav/'.format(root),
               'audio_root_path_test':'{}/mscoco2k/wav/'.format(root),
+              'audio_root_path_train_kaldi':'{}/dump/train/deltafalse/data.json'.format(kaldi_root),
+              'audio_root_path_test_kaldi':'{}/dump/test/deltafalse/data.json'.format(kaldi_root),
               'segment_file_train':'{}/mscoco2k/{}_phone_info.json'.format(root, args.dataset),
               'segment_file_test':'{}/mscoco2k/{}_phone_info.json'.format(root, args.dataset),
               'image_root_path_train':'{}/val2014/imgs/val2014/'.format(root),
@@ -59,16 +62,25 @@ configs = {}
 if args.audio_model == 'transformer':
   configs = {'n_mfcc': 83}
   
-# Set up the dataloaders  
-train_loader = torch.utils.data.DataLoader(
-  ImageAudioCaptionDataset(path['audio_root_path_train'], path['image_root_path_train'], path['segment_file_train'], path['bbox_file_train'], configs=configs),
-  batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True
-)
-
-test_loader = torch.utils.data.DataLoader(  
-  ImageAudioCaptionDataset(path['audio_root_path_test'], path['image_root_path_test'], path['segment_file_test'], path['bbox_file_test'], configs=configs),
-  batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True
-)
+# Set up the dataloaders
+if args.audio_model == 'transformer':
+  train_loader = torch.utils.data.DataLoader(
+    ImageAudioCaptionDataset(path['audio_root_path_train_kaldi'], path['image_root_path_train'], path['segment_file_train'], path['bbox_file_train'], configs=configs),
+    batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True
+  )
+  test_loader = torch.utils.data.DataLoader(
+    ImageAudioCaptionDataset(path['audio_root_path_test_kaldi'], path['image_root_path_test'], path['segment_file_test'], path['bbox_file_test'], configs=configs),
+    batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True
+  )
+else:
+  train_loader = torch.utils.data.DataLoader(
+    ImageAudioCaptionDataset(path['audio_root_path_train'], path['image_root_path_train'], path['segment_file_train'], path['bbox_file_train'], configs=configs),
+    batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True
+  )
+  test_loader = torch.utils.data.DataLoader(  
+    ImageAudioCaptionDataset(path['audio_root_path_test'], path['image_root_path_test'], path['segment_file_test'], path['bbox_file_test'], configs=configs),
+    batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True
+  )
 
 # Initialize the image and audio encoders
 if args.audio_model == 'tdnn':
