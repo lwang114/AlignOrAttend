@@ -57,8 +57,8 @@ class ImageAudioCaptionDataset(Dataset):
                   segmentation.append([cur_start, cur_start+dur])
                   cur_start += dur
           self.segmentations.append(segmentation)
-          # if len(self.segmentations) > 30: # XXX
-          #   break
+          if len(self.segmentations) > 30: # XXX
+            break
       else:
         for line in f:
           k, phn, start, end = line.strip().split()
@@ -84,8 +84,8 @@ class ImageAudioCaptionDataset(Dataset):
                 image_file_prefix = ':'.join(image_list)
                 self.image_keys.append(image_file_prefix)
                 self.bboxes.append([bbox_dict[img_id] for img_id in image_list])
-                # if len(self.bboxes) > 30: # XXX
-                #     break
+                if len(self.bboxes) > 30: # XXX
+                    break
     else:    
       with open(bbox_file, 'r') as f:
           for line in f:
@@ -107,7 +107,6 @@ class ImageAudioCaptionDataset(Dataset):
 
     # Extract segment-level acoustic features
     self.n_mfcc = self.configs.get('n_mfcc', 40)
-    # self.order = feat_configs.get('order', 2)
     self.coeff = self.configs.get('coeff', 0.97)
     self.dct_type = self.configs.get('dct_type', 3)
     self.skip_ms = self.configs.get('skip_size', 10)

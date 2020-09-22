@@ -26,7 +26,7 @@ parser.add_argument('--n_concept_class', type=int, default=80, help='Number of i
 parser.add_argument('--task', choices={'alignment', 'retrieval', 'both'}, default='retrieval', help='Type of tasks to evaluate')
 parser.add_argument('--start_step', type=int, default=0, help='Starting step of the experiment')
 parser.add_argument('--resume', action='store_true', help='Resume the experiment')
-parser.add_argument('--device', choices={'gpu', 'cpu'}, default='gpu', help='Device to use')
+parser.add_argument('--device', choices={'cuda:0', 'cuda:1', 'cpu'}, default='cuda:0', help='Device to use')
 args = parser.parse_args()
 
 # Load the data paths
@@ -66,7 +66,7 @@ if args.audio_model == 'transformer':
 if args.audio_model == 'transformer':
   train_loader = torch.utils.data.DataLoader(
     ImageAudioCaptionDataset(path['audio_root_path_train_kaldi'], path['image_root_path_train'], path['segment_file_train'], path['bbox_file_train'], configs=configs),
-    batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True
+    batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True
   )
   test_loader = torch.utils.data.DataLoader(
     ImageAudioCaptionDataset(path['audio_root_path_test_kaldi'], path['image_root_path_test'], path['segment_file_test'], path['bbox_file_test'], configs=configs),
@@ -75,7 +75,7 @@ if args.audio_model == 'transformer':
 else:
   train_loader = torch.utils.data.DataLoader(
     ImageAudioCaptionDataset(path['audio_root_path_train'], path['image_root_path_train'], path['segment_file_train'], path['bbox_file_train'], configs=configs),
-    batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True
+    batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True
   )
   test_loader = torch.utils.data.DataLoader(  
     ImageAudioCaptionDataset(path['audio_root_path_test'], path['image_root_path_test'], path['segment_file_test'], path['bbox_file_test'], configs=configs),
@@ -96,7 +96,8 @@ if args.image_model == 'vgg16':
   image_model = VGG16(n_class=args.n_concept_class)
 elif args.image_model == 'res34':
   image_model = Resnet34(n_class=args.n_concept_class)
-
+  image_model.load_state_dict(torch.load('/ws/ifp-53_2/hasegawa/lwang114/fall2020/exp/res34_pretrained_model/image_model.14.pth'))
+  
 if args.alignment_model == 'mixture_aligner':
   alignment_model = MixtureAlignmentLogLikelihood(configs={'Ks': args.n_concept_class, 'Kt': args.n_phone_class})
 

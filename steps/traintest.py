@@ -10,7 +10,7 @@ import json
 
 logger = logging.getLogger(__name__)
 def train(audio_model, image_model, alignment_model, train_loader, test_loader, args):
-    device = torch.device("cuda:1" if torch.cuda.is_available() and args.device=='gpu' else "cpu")
+    device = torch.device(args.device if torch.cuda.is_available() and args.device.split(':')[0]=='cuda' else "cpu")
     torch.set_grad_enabled(True)
     # Initialize all of the statistics we want to keep track of
     batch_time = AverageMeter()
@@ -79,14 +79,13 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
                     state[k] = v.to(device)
         print("loaded state dict from epoch %d" % epoch)
 
-    epoch += 1
-    
+    start_epoch = epoch + 1
     print("current #steps=%s, #epochs=%s" % (global_step, epoch))
     print("start training...")
 
     audio_model.train()
     image_model.train()
-    while True:
+    for epoch in range(start_epoch, args.n_epochs):
         adjust_learning_rate(args.lr, args.lr_decay, optimizer, epoch)
         end_time = time.time()
         audio_model.train()
@@ -120,9 +119,10 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
                 phone_boundary_down[b, segments] = 1 
               phone_boundary = torch.FloatTensor(phone_boundary_down).to(device=device) 
 
+            alignment_model.EMstep(image_output, audio_output, region_mask, phone_boundary)
             loss = -alignment_model(image_output, audio_output, region_mask, phone_boundary)
-            loss.backward()
-            optimizer.step()
+            # loss.backward()
+            # optimizer.step()
 
             # record loss
             loss_meter.update(loss.item(), B)
@@ -148,13 +148,12 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
             end_time = time.time()
             global_step += 1
 
-        torch.save(audio_model.state_dict(),
+        if epoch % 10 == 0:
+            torch.save(audio_model.state_dict(),
                 "%s/audio_model.%d.pth" % (exp_dir, epoch))
-        torch.save(image_model.state_dict(),
+            torch.save(image_model.state_dict(),
                 "%s/image_model.%d.pth" % (exp_dir, epoch))
-        torch.save(optimizer.state_dict(), "%s/optim_state.%d.pth" % (exp_dir, epoch))
-
-        if (epoch + 1) % 10 == 0:
+            torch.save(optimizer.state_dict(), "%s/optim_state.%d.pth" % (exp_dir, epoch))
             recalls = validate(audio_model, image_model, alignment_model, test_loader, args)
         
             avg_acc = (recalls['A_r10'] + recalls['I_r10']) / 2
@@ -170,12 +169,12 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
         epoch += 1
 
 def validate(audio_model, image_model, alignment_model, val_loader, args):
-    device = torch.device("cuda:1" if torch.cuda.is_available() and args.device=='gpu' else "cpu")
+    device = torch.device(args.device if torch.cuda.is_available() and args.device.split(':')[0]=='cuda' else "cpu")
     batch_time = AverageMeter()
-    if not isinstance(audio_model, torch.nn.DataParallel):
-        audio_model = nn.DataParallel(audio_model, device_ids=[device])
-    if not isinstance(image_model, torch.nn.DataParallel):
-        image_model = nn.DataParallel(image_model, device_ids=[device])
+    # if not isinstance(audio_model, torch.nn.DataParallel):
+    #     audio_model = nn.DataParallel(audio_model, device_ids=[device])
+    # if not isinstance(image_model, torch.nn.DataParallel):
+    #     image_model = nn.DataParallel(image_model, device_ids=[device])
     audio_model = audio_model.to(device)
     image_model = image_model.to(device)
     # switch to evaluate mode
