@@ -37,7 +37,6 @@ class MixtureAlignmentLogLikelihood(nn.Module):
     log_likelihood = torch.zeros(1, device=src_sent.device, requires_grad=True)
     B = trg_sent.size(0) 
 
-    trg_sent, trg_boundary = self.embed(trg_sent, trg_boundary)
     if self.compute_softmax:
       src_sent = self.softmax(src_sent)
       trg_sent = self.softmax(trg_sent)
@@ -64,12 +63,10 @@ class MixtureAlignmentLogLikelihood(nn.Module):
     # print('new_state_counts: {}'.format(np.mean(np.sum(new_state_counts, axis=-1))))
   
     if self.compute_softmax:
-      src_sent = self.softmax(src_sent).detach().cpu().numpy()
-      trg_sent, trg_boundary = self.embed(trg_sent, trg_boundary)
-      trg_sent = self.softmax(trg_sent).detach().cpu().numpy()
-    else:
-      trg_sent, trg_boundary = self.embed(trg_sent, trg_boundary)
-      trg_sent = trg_sent.detach().cpu().numpy()
+      src_sent = self.softmax(src_sent)
+      trg_sent = self.softmax(trg_sent)
+    src_sent = src_sent.detach().cpu().numpy()
+    trg_sent = trg_sent.detach().cpu().numpy()
 
     Ts = torch.sum(trg_boundary, axis=-1, dtype=torch.int).detach().cpu().numpy()
     for b, T in enumerate(Ts): # Mask variable length target sentences
@@ -84,11 +81,9 @@ class MixtureAlignmentLogLikelihood(nn.Module):
       trg_sent = trg_sent.unsqueeze(0) 
     B = src_sent.size(0)
 
-    trg_sent, trg_boundary = self.embed(trg_sent, trg_boundary)
     if self.compute_softmax:
       src_sent = self.softmax(src_sent)
       trg_sent = self.softmax(trg_sent)
-
     src_sent = src_sent.detach().cpu().numpy()
     trg_sent = trg_sent.detach().cpu().numpy()
 
@@ -129,7 +124,6 @@ class MixtureAlignmentLogLikelihood(nn.Module):
       trg_sent = trg_sent.unsqueeze(0) 
     B = src_sent.size(0)
       
-    trg_sent, trg_boundary = self.embed(trg_sent, trg_boundary)
     if self.compute_softmax:
       src_sent = self.softmax(src_sent)
       trg_sent = self.softmax(trg_sent)
@@ -171,7 +165,7 @@ class MixtureAlignmentLogLikelihood(nn.Module):
       src_sent = src_sent.unsqueeze(0)
       trg_sent = trg_sent.unsqueeze(0)
     B = src_sent.size(0)
-    trg_sent, trg_boundary = self.embed(trg_sent, trg_boundary)
+
     if self.compute_softmax:
       src_sent = self.softmax(src_sent)
       trg_sent = self.softmax(trg_sent)
@@ -208,24 +202,8 @@ class MixtureAlignmentLogLikelihood(nn.Module):
     return alignments, clusters, align_probs, cluster_probs
 
   def reset(self):
-    self.C_st[:] = 0.
+    self.C_st[:] = 0. 
  
-  def embed(self, trg_sent, trg_boundary):
-    nframes = trg_sent.size(1)
-    B = trg_sent.size(0) 
-
-    mask = np.zeros((B, self.T_max, nframes))
-    for b in range(B): # Compute embedding mask
-      segmentation = np.nonzero(trg_boundary[b].cpu().detach().numpy())[0]
-      if segmentation[0] != 0:
-        segmentation = np.append(0, segmentation)
-      for t, (start, end) in enumerate(zip(segmentation[:-1], segmentation[1:])):
-        mask[b, t, start:end] = 1. / max(end - start, 1)
-    
-    mask = torch.FloatTensor(mask).to(trg_sent.device)
-    trg_embeddings = torch.matmul(mask, trg_sent) # Compute target embeddings 
-    return trg_embeddings, torch.sum(mask, axis=-1)
-  
   def softmax(self, sent):
     return torch.exp(self.logsoftmax(sent))
 
@@ -259,7 +237,7 @@ class MarkovAlignmentLogLikelihood(nn.Module):
     # ------
     #   log_likelihood: float log p(x|y)
     log_likelihood = torch.zeros(1, device=src_sent.device, requires_grad=True)
-    trg_sent, trg_boundary = self.embed(trg_sent, trg_boundary)
+
     if self.compute_softmax:
       src_sent = self.softmax(src_sent)
       trg_sent = self.softmax(trg_sent)
@@ -287,7 +265,7 @@ class MarkovAlignmentLogLikelihood(nn.Module):
     backward_probs = self.compute_backward_probs(src_sent, trg_sent, src_boundary, trg_boundary, scales)
     new_state_counts = forward_probs * backward_probs / np.maximum(np.sum(forward_probs * backward_probs, axis=(2, 3), keepdims=True), EPS)
     new_trans_counts = self.compute_transition_counts(forward_probs, backward_probs, src_sent, trg_sent, src_boundary, trg_boundary)
-    trg_sent, trg_boundary = self.embed(trg_sent, trg_boundary)
+
     if self.compute_softmax:
       src_sent = self.softmax(src_sent)
       trg_sent = self.softmax(trg_sent)
@@ -311,7 +289,6 @@ class MarkovAlignmentLogLikelihood(nn.Module):
       trg_sent = trg_sent.unsqueeze(0) 
     B = src_sent.size(0)
 
-    trg_sent, trg_boundary = self.embed(trg_sent, trg_boundary)
     if self.compute_softmax:
       src_sent = self.softmax(src_sent)
       trg_sent = self.softmax(trg_sent)
@@ -348,7 +325,6 @@ class MarkovAlignmentLogLikelihood(nn.Module):
       trg_sent = trg_sent.unsqueeze(0) 
     B = src_sent.size(0)
       
-    trg_sent, trg_boundary = self.embed(trg_sent, trg_boundary)
     if self.compute_softmax:
       src_sent = self.softmax(src_sent)
       trg_sent = self.softmax(trg_sent)
@@ -379,7 +355,6 @@ class MarkovAlignmentLogLikelihood(nn.Module):
       trg_sent = trg_sent.unsqueeze(0) 
     B = src_sent.size(0)
 
-    trg_sent, trg_boundary = self.embed(trg_sent, trg_boundary)
     if self.compute_softmax:
       src_sent = self.softmax(src_sent)
       trg_sent = self.softmax(trg_sent)
@@ -420,23 +395,7 @@ class MarkovAlignmentLogLikelihood(nn.Module):
             C_st[s, next_s] += C_jumps[next_s - s]
 
     return C_st
- 
-  def embed(self, trg_sent, trg_boundary):
-    nframes = trg_sent.size(1)
-    B = trg_sent.size(0) 
-
-    mask = np.zeros((B, self.T_max, nframes))
-    for b in range(B): # Compute embedding mask 
-      segmentation = np.nonzero(trg_boundary[b].cpu().detach().numpy())[0]
-      if segmentation[0] != 0:
-        segmentation = np.append(0, segmentation)
-      for t, (start, end) in enumerate(zip(segmentation[:-1], segmentation[1:])):
-        mask[b, t, start:end] = 1. / max(end - start, 1)
-    mask = torch.FloatTensor(mask).to(src_sent.device)
-    
-    trg_embeddings = torch.matmul(mask, trg_sent) # Compute target embeddings 
-    return trg_embeddings, torch.sum(mask, axis=-1)
-  
+   
   def softmax(self, sent):
     return torch.exp(self.logsoftmax(sent))
 

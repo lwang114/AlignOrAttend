@@ -9,7 +9,7 @@ import logging
 import json
 
 logger = logging.getLogger(__name__)
-def train(audio_model, image_model, alignment_model, train_loader, test_loader, args):
+def train(source_model, target_model, source_segment_model, target_segment_model, alignment_model, train_loader, test_loader, args): # XXX
     device = torch.device(args.device if torch.cuda.is_available() and args.device.split(':')[0]=='cuda' else "cpu")
     torch.set_grad_enabled(True)
     # Initialize all of the statistics we want to keep track of
@@ -38,30 +38,33 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
         print("  best_epoch = %s" % best_epoch)
         print("  best_acc = %.4f" % best_acc)
 
-    # if not isinstance(audio_model, torch.nn.DataParallel) and args.device == 'gpu':
-    #     audio_model = nn.DataParallel(audio_model, device_ids=[device]) # XXX
-            
-    # if not isinstance(image_model, torch.nn.DataParallel) and args.device == 'gpu':
-    #     image_model = nn.DataParallel(image_model, device_ids=[device]) # XXX
+    '''
+    if not isinstance(target_model, torch.nn.DataParallel) and args.device == 'gpu':
+         target_model = nn.DataParallel(target_model, device_ids=[device])
+      
+    if not isinstance(source_model, torch.nn.DataParallel) and args.device == 'gpu':
+        source_model = nn.DataParallel(source_model, device_ids=[device])
 
-    # if not isinstance(alignment_model, torch.nn.DataParallel) and args.device == 'gpu':
-    #     alignment_model = nn.DataParallel(alignment_model, device_ids=[device]) # XXX
+    if not isinstance(alignment_model, torch.nn.DataParallel) and args.device == 'gpu':
+        alignment_model = nn.DataParallel(alignment_model, device_ids=[device])
+    '''
         
     if epoch != 0:
-        audio_model.load_state_dict(torch.load("%s/models/audio_model.%d.pth" % (exp_dir, epoch)))
-        image_model.load_state_dict(torch.load("%s/models/image_model.%d.pth" % (exp_dir, epoch)))
+        source_model.load_state_dict(torch.load("%s/models/target_model.%d.pth" % (exp_dir, epoch)))
+        target_model.load_state_dict(torch.load("%s/models/source_model.%d.pth" % (exp_dir, epoch)))
+        # TODO Load parameters for the segmenter and the aligner
         print("loaded parameters from epoch %d" % epoch)
 
-    audio_model = audio_model.to(device)
-    image_model = image_model.to(device)
+    target_model = target_model.to(device)
+    source_model = source_model.to(device)
     alignment_model = alignment_model.to(device)
 
     # Set up the optimizer
-    audio_trainables = [p for p in audio_model.parameters() if p.requires_grad]
-    image_trainables = [p for p in image_model.parameters() if p.requires_grad]
-    trainables = audio_trainables + image_trainables
+    target_trainables = [p for p in target_model.parameters() if p.requires_grad]
+    source_trainables = [p for p in source_model.parameters() if p.requires_grad]
+    trainables = target_trainables + source_trainables
     if args.optim == 'sgd':
-       optimizer = torch.optim.SGD(trainables, args.lr,
+        optimizer = torch.optim.SGD(trainables, args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
     elif args.optim == 'adam':
@@ -83,46 +86,66 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
     print("current #steps=%s, #epochs=%s" % (global_step, epoch))
     print("start training...")
 
-    audio_model.train()
-    image_model.train()
+    target_model.train()
+    source_model.train()
     for epoch in range(start_epoch, args.n_epochs):
         adjust_learning_rate(args.lr, args.lr_decay, optimizer, epoch)
         end_time = time.time()
-        audio_model.train()
-        image_model.train()
-        # TODO Make the definition of region masks more consistent with the original definition 
-        for i, (image_input, audio_input, region_mask, phone_boundary) in enumerate(train_loader):
+        target_model.train()
+        source_model.train()
+        
+        for i, (source_input, target_input, source_segmentation, target_segmentation) in enumerate(train_loader):
             # measure data loading time
             data_time.update(time.time() - end_time)
-            B = audio_input.size(0)
+            B = target_input.size(0)
 
-            audio_input = audio_input.to(device)
-            image_input = image_input.to(device)
-            phone_boundary = phone_boundary.to(device)
-            region_mask = region_mask.to(device)
+            target_input = target_input.to(device)
+            source_input = source_input.to(device)
+            target_segmentation = target_segmentation.to(device)
+            source_segmentation = source_segmentation.to(device)
             optimizer.zero_grad()
 
-            audio_output = audio_model(audio_input)
-            if len(image_input.size()) >= 5: # Collapse the first two dimensions if image input includes multiple regions per image
-                L = image_input.size(1)
-                image_input = image_input.view(B*L, image_input.size(2), image_input.size(3), image_input.size(4))
-                image_output = image_model(image_input)
-                image_output = image_output.view(B, L, -1)
+            # Compute source and target outputs
+            if len(source_input.size()) >= 5: # Collapse the first two dimensions if image input includes multiple regions per image
+                L = source_input.size(1)
+                source_input = source_input.view(B*L, source_input.size(2), source_input.size(3), source_input.size(4))
+                source_output = source_model(source_input)
+                source_output = source_output.view(B, L, -1)
             else:
-                image_output = image_model(image_input)
-
-            pooling_ratio = round(audio_input.size(-1) / audio_output.size(-1))
-            if pooling_ratio > 1:
-              phone_boundary_down = np.zeros((B, phone_boundary.size(-1) // pooling_ratio))
+                source_output = source_model(source_input)
+            
+            if len(target_input.size()) >= 5:
+                L = target_input.size(1)
+                target_input = target_input.view(B*L, target_input.size(2), target_input.size(3), target_input.size(4))
+                target_output = target_model(target_input)
+                target_output = target_output.view(B, L, -1)
+            else:
+                target_output = target_model(target_input)
+            
+            source_pooling_ratio = round(source_input.size(-1) / source_output.size(-1))
+            target_pooling_ratio = round(target_input.size(-1) / target_output.size(-1))
+            # Downsample the source segmentation by pooling ratio
+            if source_pooling_ratio > 1: 
               for b in range(B):
-                segments = np.nonzero(phone_boundary[b].cpu().numpy())[0] // pooling_ratio
-                phone_boundary_down[b, segments] = 1 
-              phone_boundary = torch.FloatTensor(phone_boundary_down).to(device=device) 
+                segments = np.nonzero(source_segmentation[b].cpu().numpy())[0] // source_pooling_ratio
+                source_segmentation_down[b, segments] = 1
+              source_segmentation = torch.FloatTensor(source_segmentation_down).to(device=device)
 
-            alignment_model.EMstep(image_output, audio_output, region_mask, phone_boundary)
-            loss = -alignment_model(image_output, audio_output, region_mask, phone_boundary)
-            # loss.backward()
-            # optimizer.step()
+            # Downsample the target segmentation by pooling ratio
+            if target_pooling_ratio > 1:
+              target_segmentation_down = np.zeros((B, target_segmentation.size(-1) // target_pooling_ratio))
+              for b in range(B):
+                segments = np.nonzero(target_segmentation[b].cpu().numpy())[0] // target_pooling_ratio
+                target_segmentation_down[b, segments] = 1 
+              target_segmentation = torch.FloatTensor(target_segmentation_down).to(device=device) 
+
+            # Convert the segmentations to masks
+            source_output, source_masks = source_segment_model.embed(source_output, source_segmentation) # TODO 
+            target_output, target_masks = target_segment_model.embed(target_output, target_segmentation)
+            alignment_model.EMstep(source_output, target_output, source_masks, target_masks)
+            loss = -alignment_model(source_output, target_output, source_masks, target_masks)
+            loss.backward()
+            optimizer.step()
 
             # record loss
             loss_meter.update(loss.item(), B)
@@ -149,82 +172,103 @@ def train(audio_model, image_model, alignment_model, train_loader, test_loader, 
             global_step += 1
 
         if epoch % 10 == 0:
-            torch.save(audio_model.state_dict(),
-                "%s/audio_model.%d.pth" % (exp_dir, epoch))
-            torch.save(image_model.state_dict(),
-                "%s/image_model.%d.pth" % (exp_dir, epoch))
+            # TODO Save parameters for the aligner and the segmenter
+            torch.save(target_model.state_dict(),
+                "%s/target_model.%d.pth" % (exp_dir, epoch))
+            torch.save(source_model.state_dict(),
+                "%s/source_model.%d.pth" % (exp_dir, epoch))
             torch.save(optimizer.state_dict(), "%s/optim_state.%d.pth" % (exp_dir, epoch))
-            recalls = validate(audio_model, image_model, alignment_model, test_loader, args)
+            
+            recalls = validate(source_model, target_model, source_segment_model, target_segment_model, alignment_model, test_loader, args)
         
             avg_acc = (recalls['A_r10'] + recalls['I_r10']) / 2
         
             if avg_acc > best_acc:
                 best_epoch = epoch
                 best_acc = avg_acc
-                shutil.copyfile("%s/audio_model.%d.pth" % (exp_dir, epoch), 
-                                "%s/best_audio_model.pth" % (exp_dir))
-                shutil.copyfile("%s/image_model.%d.pth" % (exp_dir, epoch), 
-                                "%s/best_image_model.pth" % (exp_dir))
+                shutil.copyfile("%s/target_model.%d.pth" % (exp_dir, epoch), 
+                                "%s/best_target_model.pth" % (exp_dir))
+                shutil.copyfile("%s/source_model.%d.pth" % (exp_dir, epoch), 
+                                "%s/best_source_model.pth" % (exp_dir))
         _save_progress()
         epoch += 1
 
-def validate(audio_model, image_model, alignment_model, val_loader, args):
+def validate(source_model, target_model, source_segment_model, target_segment_model, alignment_model, val_loader, args):
     device = torch.device(args.device if torch.cuda.is_available() and args.device.split(':')[0]=='cuda' else "cpu")
     batch_time = AverageMeter()
-    # if not isinstance(audio_model, torch.nn.DataParallel):
-    #     audio_model = nn.DataParallel(audio_model, device_ids=[device])
-    # if not isinstance(image_model, torch.nn.DataParallel):
-    #     image_model = nn.DataParallel(image_model, device_ids=[device])
-    audio_model = audio_model.to(device)
-    image_model = image_model.to(device)
+    # if not isinstance(target_model, torch.nn.DataParallel):
+    #     target_model = nn.DataParallel(target_model, device_ids=[device])
+    # if not isinstance(source_model, torch.nn.DataParallel):
+    #     source_model = nn.DataParallel(source_model, device_ids=[device])
+    target_model = target_model.to(device)
+    source_model = source_model.to(device)
     # switch to evaluate mode
-    image_model.eval()
-    audio_model.eval()
+    source_model.eval()
+    target_model.eval()
 
     end = time.time()
     N_examples = val_loader.dataset.__len__()
     I_embeddings = [] 
     A_embeddings = [] 
-    region_masks = []
-    phone_boundaries = []
+    source_masks = []
+    target_masks = []
     frame_counts = []
     align_results = []
     with torch.no_grad():
-        for i, (image_input, audio_input, region_mask, phone_boundary) in enumerate(val_loader):
-            B = image_input.size(0)
-            image_input = image_input.to(device)
-            audio_input = audio_input.to(device)
-            phone_boundary = phone_boundary.to(device)
-            region_mask = region_mask.to(device)
+        for i, (source_input, target_input, source_segmentation, target_segmentation) in enumerate(val_loader):
+            B = source_input.size(0)
+            source_input = source_input.to(device)
+            target_input = target_input.to(device)
+            target_segmentation = target_segmentation.to(device)
+            source_segmentation = source_segmentation.to(device)
 
-            # compute output
-            if len(image_input.size()) >= 5: # Collapse the first two dimensions if image input includes multiple regions per image
-                L = image_input.size(1)
-                image_input = image_input.view(B*L, image_input.size(2), image_input.size(3), image_input.size(4))
-                image_output = image_model(image_input)
-                image_output = image_output.view(B, L, -1)
+            # Compute source and target outputs
+            if len(source_input.size()) >= 5: # Collapse the first two dimensions if image input includes multiple regions per image
+                L = source_input.size(1)
+                source_input = source_input.view(B*L, source_input.size(2), source_input.size(3), source_input.size(4))
+                source_output = source_model(source_input)
+                source_output = source_output.view(B, L, -1)
             else:
-                image_output = image_model(image_input)
-            audio_output = audio_model(audio_input)
-
-            image_output = image_output.cpu().detach()
-            audio_output = audio_output.cpu().detach()
-
-            I_embeddings.append(image_output)
-            A_embeddings.append(audio_output)
-            region_masks.append(region_mask)
-            phone_boundaries.append(phone_boundary)
+                source_output = source_model(source_input)
             
-            pooling_ratio = round(audio_input.size(-1) / audio_output.size(-1))
-            # Downsample the phone boundary according to the pooling ratio
-            if pooling_ratio > 1:
-              phone_boundary_down = np.zeros((B, phone_boundary.size(-1) // pooling_ratio))
+            if len(target_input.size()) >= 5:
+                L = target_input.size(1)
+                target_input = target_input.view(B*L, target_input.size(2), source_input.size(3), source_input.size(4))
+                target_output = target_model(target_input)
+                target_output = target_output.view(B, L, -1)
+            else:
+                target_output = target_model(target_input)
+            
+            source_output = source_output.cpu().detach()
+            target_output = target_output.cpu().detach()
+
+            I_embeddings.append(source_output)
+            A_embeddings.append(target_output)
+            
+            source_pooling_ratio = round(source_input.size(-1) / source_output.size(-1))
+            target_pooling_ratio = round(target_input.size(-1) / target_output.size(-1))
+            # Downsample the segmentations according to the pooling ratio
+            if source_pooling_ratio > 1:
+              source_segmentation_down = np.zeros((B, source_segmentation.size(-1) // source_pooling_ratio))
               for b in range(B):
-                segments = np.nonzero(phone_boundary[b].cpu().numpy())[0] // pooling_ratio
-                phone_boundary_down[b, segments] = 1 
-              phone_boundary = torch.tensor(phone_boundary_down, device=device) 
+                segments = np.nonzero(source_segmentation[b].cpu().numpy())[0] // pooling_ratio
+                source_segmentation_down[b, segments] = 1
+              source_segmentation = torch.FloatTensor(source_segmentation_down).to(device=device)
             
-            alignments, clusters, _, _ = alignment_model.discover(image_output, audio_output, region_mask, phone_boundary)
+            if target_pooling_ratio > 1:
+              target_segmentation_down = np.zeros((B, target_segmentation.size(-1) // target_pooling_ratio))
+              for b in range(B):
+                segments = np.nonzero(target_segmentation[b].cpu().numpy())[0] // pooling_ratio
+                target_segmentation_down[b, segments] = 1 
+              target_segmentation = torch.FloatTensor(target_segmentation_down).to(device=device) 
+            
+            source_output, source_mask = source_segment_model.embed(source_output, source_segmentation)
+            target_output, target_mask = target_segment_model.embed(target_output, target_segmentation)
+
+            source_masks.append(source_mask)
+            target_masks.append(target_mask)
+           
+            alignments, clusters, _, _ = alignment_model.discover(source_output, target_output, source_mask, target_mask)
             for b, (alignment, cluster) in enumerate(zip(alignments, clusters)):
               align_results.append({'index': i*B+b,
                                     'alignment': alignment.tolist(),
@@ -232,11 +276,13 @@ def validate(audio_model, image_model, alignment_model, val_loader, args):
             batch_time.update(time.time() - end)
             end = time.time()
 
-        image_output = torch.cat(I_embeddings)
-        audio_output = torch.cat(A_embeddings)
-        region_masks = torch.cat(region_masks)
-        phone_boundaries = torch.cat(phone_boundaries)
-        recalls = calc_recalls(image_output, audio_output, region_masks, phone_boundaries, alignment_model)
+        source_output = torch.cat(I_embeddings)
+        target_output = torch.cat(A_embeddings)
+
+        source_masks = torch.cat(source_masks)
+        target_masks = torch.cat(target_masks)
+
+        recalls = calc_recalls(source_output, target_output, source_masks, target_masks, alignment_model)
         A_r10 = recalls['A_r10']
         I_r10 = recalls['I_r10']
         A_r5 = recalls['A_r5']

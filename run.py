@@ -3,6 +3,7 @@ import os
 
 from models.AudioModels import *
 from models.ImageModels import *
+from models.SegmentModels import NoopSegmenter
 from models.AlignmentLogLikelihoods import *
 from steps.traintest import train, validate  
 from dataloaders.image_audio_caption_dataset import ImageAudioCaptionDataset
@@ -13,6 +14,7 @@ parser.add_argument('--dataset', choices={'mscoco2k', 'mscoco20k', 'mscoco'})
 parser.add_argument('--audio_model', choices={'lstm', 'tdnn', 'transformer'}, default='lstm')
 parser.add_argument('--image_model', choices={'res34', 'vgg16'}, default='res34')
 parser.add_argument('--alignment_model', choices={'mixture_aligner'}, default='mixture_aligner')
+parser.add_argument('--translate_direction', choices={'sp2im', 'im2sp'}, default='sp2im', help='Translation direction (target -> source)') # TODO
 parser.add_argument('--batch_size', '-b', type=int, default=16, help='Batch size')
 parser.add_argument('--optim', choices={'sgd', 'adam'}, default='sgd', help='Type of optimizer')
 parser.add_argument('--lr', type=float, default=1e-5, help='Learning rate')
@@ -97,13 +99,16 @@ if args.image_model == 'vgg16':
 elif args.image_model == 'res34':
   image_model = Resnet34(n_class=args.n_concept_class)
   image_model.load_state_dict(torch.load('/ws/ifp-53_2/hasegawa/lwang114/fall2020/exp/res34_pretrained_model/image_model.14.pth'))
-  
+
 if args.alignment_model == 'mixture_aligner':
   alignment_model = MixtureAlignmentLogLikelihood(configs={'Ks': args.n_concept_class, 'Kt': args.n_phone_class})
 
 # Train the model
 if args.start_step <= 0:
-  train(audio_model, image_model, alignment_model, train_loader, test_loader, args)
+  if args.translate_direction == 'sp2im':
+    train(image_model, audio_model, NoopSegmenter(), NoopSegmenter(), alignment_model, train_loader, test_loader, args)
+  elif args.model_type == 'im2sp':
+    train(audio_model, image_model, NoopSegmenter(), NoopSegmenter(), alignment_model, train_loader, test_loader, args)
 
 # Evaluate the model
 if args.start_step <= 1:
