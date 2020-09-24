@@ -54,15 +54,24 @@ if not os.path.isfile('data/{}_path.json'.format(args.dataset)):
               'bbox_file_train':'{}/mscoco2k/{}_bboxes.txt'.format(root, args.dataset),
               'bbox_file_test':'{}/mscoco2k/{}_bboxes.txt'.format(root, args.dataset)}
     else:
-      raise NotImplementedError
-    json.dump(path, f)
+      raise ValueError('Data path file not found')
+    json.dump(path, f, indent=4, sort_keys=True)
 else:
   with open('data/{}_path.json'.format(args.dataset), 'r') as f:
     path = json.load(f) 
 
-configs = {}
+# XXX if args.dataset == 'mscoco2k' or args.dataset == 'mscoco20k':
+#   args.n_concept_class = args.n_phone_class = 65
+
+configs = {'max_num_regions': 5,
+           'max_num_phones': 50,
+           'max_num_frames': 500}
 if args.audio_model == 'transformer':
-  configs = {'n_mfcc': 83}
+  configs['n_mfcc'] = 83
+if args.translate_direction == 'sp2im':
+  configs['image_first'] = True
+elif args.translate_direction == 'im2sp':
+  configs['image_first'] = False
   
 # Set up the dataloaders
 if args.audio_model == 'transformer':
@@ -88,11 +97,14 @@ else:
 if args.audio_model == 'tdnn':
   audio_model = TDNN3(n_class=args.n_phone_class)
 elif args.audio_model == 'lstm':
-  audio_model = BLSTM3(n_class=args.n_phone_class)
-  audio_model.load_state_dict(torch.load('/ws/ifp-53_2/hasegawa/lwang114/summer2020/exp/blstm3_mscoco_train_sgd_lr_0.00001_mar25/audio_model.7.pth'))
-elif args.audio_model == 'transformer': # TODO Add option to specify the pretrained model file
+  pretrained_model_file = '/ws/ifp-53_2/hasegawa/lwang114/summer2020/exp/blstm3_mscoco_train_sgd_lr_0.00001_mar25/audio_model.7.pth' 
+  audio_model = BLSTM3(n_class=args.n_phone_class,
+                       return_empty=False)
+  audio_model.load_state_dict(torch.load(pretrained_model_file))
+elif args.audio_model == 'transformer': # TODO Return non-empty labels only
+  pretrained_model_file = '/ws/ifp-53_1/hasegawa/tools/espnet/egs/discophone/ifp_lwang114/dump/mscoco/eval/deltafalse/split1utt/data_encoder.pth'
   audio_model = Transformer(n_class=args.n_phone_class,
-                            pretrained_model_file='/ws/ifp-53_1/hasegawa/tools/espnet/egs/discophone/ifp_lwang114/dump/mscoco/eval/deltafalse/split1utt/data_encoder.pth')
+                            pretrained_model_file=pretrained_model_file)
   
 if args.image_model == 'vgg16':
   image_model = VGG16(n_class=args.n_concept_class)
@@ -101,14 +113,35 @@ elif args.image_model == 'res34':
   image_model.load_state_dict(torch.load('/ws/ifp-53_2/hasegawa/lwang114/fall2020/exp/res34_pretrained_model/image_model.14.pth'))
 
 if args.alignment_model == 'mixture_aligner':
-  alignment_model = MixtureAlignmentLogLikelihood(configs={'Ks': args.n_concept_class, 'Kt': args.n_phone_class})
-
+  if args.translate_direction == 'sp2im':
+    alignment_model = MixtureAlignmentLogLikelihood(configs={'Ks': args.n_concept_class, 'Kt': args.n_phone_class - 1})
+  elif args.translate_direction == 'im2sp':
+    alignment_model = MixtureAlignmentLogLikelihood(configs={'Ks': args.n_phone_class - 1, 'Kt': args.n_concept_class})
+    
 # Train the model
 if args.start_step <= 0:
   if args.translate_direction == 'sp2im':
-    train(image_model, audio_model, NoopSegmenter(), NoopSegmenter(), alignment_model, train_loader, test_loader, args)
-  elif args.model_type == 'im2sp':
-    train(audio_model, image_model, NoopSegmenter(), NoopSegmenter(), alignment_model, train_loader, test_loader, args)
+    train(image_model,
+          audio_model,
+          NoopSegmenter({'max_nframes': configs['max_num_regions'],
+                         'max_nsegments': configs['max_num_regions']}),
+          NoopSegmenter({'max_nframes': configs['max_num_frames'],
+                         'max_nsegments': configs['max_num_phones']}),
+          alignment_model,
+          train_loader,
+          test_loader,
+          args)
+  elif args.translate_direction == 'im2sp':
+    train(audio_model,
+          image_model,
+          NoopSegmenter({'max_nframes': configs['max_num_frames'],
+                         'max_nsegments': configs['max_num_phones']}),
+          NoopSegmenter({'max_nframes': configs['max_num_regions'],
+                         'max_nsegments': configs['max_num_regions']}),
+          alignment_model,
+          train_loader,
+          test_loader,
+          args)
 
 # Evaluate the model
 if args.start_step <= 1:

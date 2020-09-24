@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from espnet.nets.pytorch_backend.transformer.encoder import Encoder
 from espnet.nets.pytorch_backend.nets_utils import make_non_pad_mask
+from sklearn.cluster import KMeans
 
 class Transformer(nn.Module):
   def __init__(self, n_class,
@@ -57,7 +58,11 @@ class BLSTM2(nn.Module):
     self.n_layers = n_layers
     self.n_class = n_class
     self.batch_first = batch_first
-    self.rnn = nn.LSTM(input_size=40, hidden_size=embedding_dim, num_layers=n_layers, batch_first=batch_first, bidirectional=True)
+    self.rnn = nn.LSTM(input_size=40,
+                       hidden_size=embedding_dim,
+                       num_layers=n_layers,
+                       batch_first=batch_first,
+                       bidirectional=True)
     self.fc = nn.Linear(2 * embedding_dim, n_class)
     self.softmax = nn.Softmax(dim=1)
     
@@ -67,7 +72,6 @@ class BLSTM2(nn.Module):
 
     B = x.size(0)
     T = x.size(1)
-    device = 'cuda:1' if x.is_cuda else 'cpu' # XXX
     h0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim), device=x.device)
     c0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim), device=x.device)
     embed, _ = self.rnn(x, (h0, c0))
@@ -83,19 +87,42 @@ class BLSTM2(nn.Module):
       return torch.stack(outputs, dim=(0 if self.batch_first else 1))
 
 class BLSTM3(nn.Module):
-  def __init__(self, n_class, embedding_dim=100, n_layers=2, layer1_pretrain_file=None, batch_first=True):
+  def __init__(self, n_class,
+               embedding_dim=100,
+               n_layers=2,
+               layer1_pretrain_file=None,
+               batch_first=True,
+               return_empty=False):
     super(BLSTM3, self).__init__()
     self.embedding_dim = embedding_dim
     self.n_layers = n_layers
     self.n_class = n_class
     self.batch_first = batch_first
+    self.return_empty = return_empty
+
     self.rnn1 = BLSTM2(n_class, embedding_dim, batch_first=batch_first)
     if layer1_pretrain_file:
       self.rnn1.load_state_dict(torch.load(layer1_pretrain_file))
-    self.rnn2 = nn.LSTM(input_size=2*embedding_dim, hidden_size=embedding_dim, num_layers=n_layers, batch_first=batch_first, bidirectional=True)
+    for child in self.rnn1.children():
+      for p in child.parameters():
+        p.requires_grad = False
+      
+    self.rnn2 = nn.LSTM(input_size=2*embedding_dim,
+                        hidden_size=embedding_dim,
+                        num_layers=n_layers,
+                        batch_first=batch_first,
+                        bidirectional=True)
+    self.codebook = None
+    self.precision = None 
+    
+    for p in self.rnn2.parameters():
+      p.requires_grad = False
+      
     self.fc = nn.Linear(2 * embedding_dim, n_class)
 
-  def forward(self, x, save_features=False):
+  def forward(self, x,
+              save_features=False,
+              return_empty=True):
     x, _ = self.rnn1(x, save_features=True) 
     B = x.size(0)
     T = x.size(1)
@@ -105,9 +132,45 @@ class BLSTM3(nn.Module):
     outputs = [self.fc(embed[b]) for b in range(B)]
 
     if save_features:
-      return embed, torch.stack(outputs, dim=(0 if self.batch_first else 1))
+      if self.return_empty:
+        return embed, torch.stack(outputs, dim=(0 if self.batch_first else 1))
+      else: # Assume empty index is 0
+        return embed, torch.stack(outputs, dim=(0 if self.batch_first else 1))[:, :, 1:]
     else:
-      return torch.stack(outputs, dim=(0 if self.batch_first else 1))
+      if self.return_empty:
+        return torch.stack(outputs, dim=(0 if self.batch_first else 1))
+      else: # Assume empty index is 0
+        return torch.stack(outputs, dim=(0 if self.batch_first else 1))[:, :, 1:]
+
+  def cluster(self, x,
+              out_file=None,
+              return_score=True,
+              n_class=None):
+    """
+    Args: 
+        x: B x T x D array of acoustic features
+ 
+    Returns:
+        p_x: B x T x K array of posterior probabilities 
+             [[[p(c_t=k|x_t) for k in range(K)] for t in range(T)] for b in range(B)]
+    """
+    if not n_class:
+      n_class = self.n_class
+      
+    if self.codebook is None:
+      B = x.shape[0]
+      T = x.shape[1]
+      kmeans = KMeans(n_clusters=n_class)
+      self.codebook = kmeans.fit(x.reshape(B*T, -1)).cluster_centers_
+      if out_file:
+        np.save(out_file, self.codebook)
+      self.codebook = torch.FloatTensor(self.codebook)
+      self.precision = 0.1 * torch.ones((1, 1))
+      
+    if return_score:
+      score = -(x.unsqueeze(-2) - self.codebook).pow(2).sum(-1)
+      return precision.unsqueeze(0) * score
+
 
 class TDNN3(nn.Module):
   def __init__(self, n_class, embedding_dim=128):

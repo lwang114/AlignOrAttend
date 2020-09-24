@@ -26,6 +26,7 @@ class ImageAudioCaptionDataset(Dataset):
     self.max_nregions = configs.get('max_num_regions', 5)
     self.max_nphones = configs.get('max_num_phones', 50)
     self.max_nframes = configs.get('max_num_frames', 500)
+    self.image_first = configs.get('image_first', True)
     self.audio_keys = []
     self.audio_root_path = audio_root_path
     self.segmentations = []
@@ -36,7 +37,7 @@ class ImageAudioCaptionDataset(Dataset):
     if self.audio_root_path.split('.')[-1] == 'json': # Assume kaldi format if audio_root_path is a json file
         with open(audio_root_path, 'r') as f:
             audio_feat_dict = json.load(f)['utts']
-            
+    
     # Load phone segments
     with open(segment_file, 'r') as f:
       if segment_file.split('.')[-1] == 'json':
@@ -57,8 +58,8 @@ class ImageAudioCaptionDataset(Dataset):
                   segmentation.append([cur_start, cur_start+dur])
                   cur_start += dur
           self.segmentations.append(segmentation)
-          if len(self.segmentations) > 30: # XXX
-            break
+          # if len(self.segmentations) > 30: # XXX
+          #   break
       else:
         for line in f:
           k, phn, start, end = line.strip().split()
@@ -84,8 +85,8 @@ class ImageAudioCaptionDataset(Dataset):
                 image_file_prefix = ':'.join(image_list)
                 self.image_keys.append(image_file_prefix)
                 self.bboxes.append([bbox_dict[img_id] for img_id in image_list])
-                if len(self.bboxes) > 30: # XXX
-                    break
+                # if len(self.bboxes) > 30: # XXX
+                #     break
     else:    
       with open(bbox_file, 'r') as f:
           for line in f:
@@ -99,7 +100,6 @@ class ImageAudioCaptionDataset(Dataset):
                   self.bboxes.append([[x, y, w, h]]) 
               else:
                   self.bboxes[-1].append([x, y, w, h])
-
                   
   def __getitem__(self, idx):
     if torch.is_tensor(idx):
@@ -120,16 +120,14 @@ class ImageAudioCaptionDataset(Dataset):
                                                                   transforms.ToTensor(),
                                                                   transforms.Normalize(mean=RGB_mean, std=RGB_std)]))
     
-    phone_boundary = np.zeros(self.max_nframes, dtype=int)
+    phone_boundary = np.zeros(self.max_nframes+1)
     for i_s, segment in enumerate(self.segmentations[idx]):
       start_ms, end_ms = segment
       start_frame, end_frame = int(start_ms / 10), int(end_ms / 10)
       if end_frame > self.max_nframes:
         break
-
-      if start_frame != 0:
-          phone_boundary[start_frame] = 1
-      phone_boundary[end_frame] = 1
+      phone_boundary[start_frame] = 1.
+      phone_boundary[end_frame] = 1.
 
     if self.audio_root_path.split('.')[-1] == 'json': # Assume kaldi format if audio_root_path is a json file
         mfcc = kaldiio.load_mat(self.audio_keys[idx])
@@ -157,11 +155,10 @@ class ImageAudioCaptionDataset(Dataset):
       
     # Extract visual features 
     regions = []
-    region_mask = np.zeros(self.max_nregions, dtype=int)
+    region_mask = np.zeros(self.max_nregions+1)
     for i_b, bbox in enumerate(self.bboxes[idx]):
       if i_b > self.max_nregions:
         break
-      region_mask[i_b] = 1
       x, y, w, h = bbox 
       x, y, w, h = int(x), int(y), np.maximum(int(w), 1), np.maximum(int(h), 1)
       if ':' in self.image_keys[idx]:
@@ -178,14 +175,24 @@ class ImageAudioCaptionDataset(Dataset):
       regions.append(region)
       if len(regions) == self.max_nregions:
           break
+    region_mask[:len(regions)+1] = 1.  
+    
     if len(regions) < self.max_nregions:
         if len(regions) == 0:
             print('Warning: empty image')
             regions = [torch.zeros((3, self.height, self.width)) for _ in range(self.max_nregions)]
         for _ in range(self.max_nregions-len(regions)):
             regions.append(torch.zeros(regions[0].size()))
-      
-    return torch.stack(regions, axis=0), torch.FloatTensor(mfcc), torch.FloatTensor(region_mask), torch.FloatTensor(phone_boundary)
+
+    regions = torch.stack(regions, axis=0)
+    mfcc = torch.FloatTensor(mfcc)
+    region_mask = torch.FloatTensor(region_mask)
+    phone_boundary = torch.FloatTensor(phone_boundary)
+
+    if self.image_first:
+        return regions, mfcc, region_mask, phone_boundary
+    else:
+        return mfcc, regions, phone_boundary, region_mask
  
   def __len__(self):
     return len(self.audio_keys)

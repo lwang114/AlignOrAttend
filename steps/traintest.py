@@ -9,7 +9,11 @@ import logging
 import json
 
 logger = logging.getLogger(__name__)
-def train(source_model, target_model, source_segment_model, target_segment_model, alignment_model, train_loader, test_loader, args): # XXX
+def train(source_model, target_model,
+          source_segment_model, target_segment_model,
+          alignment_model,
+          train_loader, test_loader,
+          args):
     device = torch.device(args.device if torch.cuda.is_available() and args.device.split(':')[0]=='cuda' else "cpu")
     torch.set_grad_enabled(True)
     # Initialize all of the statistics we want to keep track of
@@ -88,12 +92,13 @@ def train(source_model, target_model, source_segment_model, target_segment_model
 
     target_model.train()
     source_model.train()
+
     for epoch in range(start_epoch, args.n_epochs):
         adjust_learning_rate(args.lr, args.lr_decay, optimizer, epoch)
         end_time = time.time()
         target_model.train()
         source_model.train()
-        
+
         for i, (source_input, target_input, source_segmentation, target_segmentation) in enumerate(train_loader):
             # measure data loading time
             data_time.update(time.time() - end_time)
@@ -108,24 +113,26 @@ def train(source_model, target_model, source_segment_model, target_segment_model
             # Compute source and target outputs
             if len(source_input.size()) >= 5: # Collapse the first two dimensions if image input includes multiple regions per image
                 L = source_input.size(1)
-                source_input = source_input.view(B*L, source_input.size(2), source_input.size(3), source_input.size(4))
-                source_output = source_model(source_input)
+                source_input_4d = source_input.view(B*L, source_input.size(2), source_input.size(3), source_input.size(4))
+                source_output = source_model(source_input_4d)
                 source_output = source_output.view(B, L, -1)
             else:
                 source_output = source_model(source_input)
             
             if len(target_input.size()) >= 5:
                 L = target_input.size(1)
-                target_input = target_input.view(B*L, target_input.size(2), target_input.size(3), target_input.size(4))
-                target_output = target_model(target_input)
+                target_input_4d = target_input.view(B*L, target_input.size(2), target_input.size(3), target_input.size(4))
+                target_output = target_model(target_input_4d)
                 target_output = target_output.view(B, L, -1)
             else:
                 target_output = target_model(target_input)
             
-            source_pooling_ratio = round(source_input.size(-1) / source_output.size(-1))
-            target_pooling_ratio = round(target_input.size(-1) / target_output.size(-1))
+            source_pooling_ratio = round(source_input.size(1) / source_output.size(1))
+            target_pooling_ratio = round(target_input.size(1) / target_output.size(1))
+
             # Downsample the source segmentation by pooling ratio
             if source_pooling_ratio > 1: 
+              source_segmentation_down = np.zeros((B, source_segmentation.size(-1) // source_pooling_ratio))
               for b in range(B):
                 segments = np.nonzero(source_segmentation[b].cpu().numpy())[0] // source_pooling_ratio
                 source_segmentation_down[b, segments] = 1
@@ -140,10 +147,11 @@ def train(source_model, target_model, source_segment_model, target_segment_model
               target_segmentation = torch.FloatTensor(target_segmentation_down).to(device=device) 
 
             # Convert the segmentations to masks
-            source_output, source_masks = source_segment_model.embed(source_output, source_segmentation) # TODO 
-            target_output, target_masks = target_segment_model.embed(target_output, target_segmentation)
-            alignment_model.EMstep(source_output, target_output, source_masks, target_masks)
-            loss = -alignment_model(source_output, target_output, source_masks, target_masks)
+            source_output, source_mask, _ = source_segment_model(source_output, source_segmentation)
+            target_output, target_mask, _ = target_segment_model(target_output, target_segmentation)
+
+            loss = -alignment_model(source_output, target_output, source_mask, target_mask)
+            alignment_model.EMstep(source_output, target_output, source_mask, target_mask)
             loss.backward()
             optimizer.step()
 
@@ -171,6 +179,7 @@ def train(source_model, target_model, source_segment_model, target_segment_model
             end_time = time.time()
             global_step += 1
 
+        alignment_model.reset()
         if epoch % 10 == 0:
             # TODO Save parameters for the aligner and the segmenter
             torch.save(target_model.state_dict(),
@@ -245,13 +254,13 @@ def validate(source_model, target_model, source_segment_model, target_segment_mo
             I_embeddings.append(source_output)
             A_embeddings.append(target_output)
             
-            source_pooling_ratio = round(source_input.size(-1) / source_output.size(-1))
-            target_pooling_ratio = round(target_input.size(-1) / target_output.size(-1))
+            source_pooling_ratio = round(source_input.size(1) / source_output.size(1))
+            target_pooling_ratio = round(target_input.size(1) / target_output.size(1))
             # Downsample the segmentations according to the pooling ratio
             if source_pooling_ratio > 1:
               source_segmentation_down = np.zeros((B, source_segmentation.size(-1) // source_pooling_ratio))
               for b in range(B):
-                segments = np.nonzero(source_segmentation[b].cpu().numpy())[0] // pooling_ratio
+                segments = np.nonzero(source_segmentation[b].cpu().numpy())[0] // source_pooling_ratio
                 source_segmentation_down[b, segments] = 1
               source_segmentation = torch.FloatTensor(source_segmentation_down).to(device=device)
             
@@ -262,8 +271,8 @@ def validate(source_model, target_model, source_segment_model, target_segment_mo
                 target_segmentation_down[b, segments] = 1 
               target_segmentation = torch.FloatTensor(target_segmentation_down).to(device=device) 
             
-            source_output, source_mask = source_segment_model.embed(source_output, source_segmentation)
-            target_output, target_mask = target_segment_model.embed(target_output, target_segmentation)
+            source_output, source_mask, _ = source_segment_model(source_output, source_segmentation)
+            target_output, target_mask, _ = target_segment_model(target_output, target_segmentation)
 
             source_masks.append(source_mask)
             target_masks.append(target_mask)
