@@ -52,11 +52,11 @@ def train(source_model, target_model,
     if not isinstance(alignment_model, torch.nn.DataParallel) and args.device == 'gpu':
         alignment_model = nn.DataParallel(alignment_model, device_ids=[device])
     '''
-        
+    
     if epoch != 0:
         source_model.load_state_dict(torch.load("%s/models/target_model.%d.pth" % (exp_dir, epoch)))
         target_model.load_state_dict(torch.load("%s/models/source_model.%d.pth" % (exp_dir, epoch)))
-        # TODO Load parameters for the segmenter and the aligner
+        # TODO Load parameters for the segmenter and the aligner        
         print("loaded parameters from epoch %d" % epoch)
 
     target_model = target_model.to(device)

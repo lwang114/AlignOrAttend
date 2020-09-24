@@ -30,6 +30,7 @@ class Resnet18(imagemodels.ResNet):
 class Resnet34(imagemodels.ResNet):
     def __init__(self, n_class=80, pretrained=False):
         super(Resnet34, self).__init__(imagemodels.resnet.BasicBlock, [3, 4, 6, 3])
+        self.fc = nn.Linear(512, n_class)
         if pretrained:
             self.load_state_dict(model_zoo.load_url(imagemodels.resnet.model_urls['resnet34']))
             for child in self.conv1.children():
@@ -56,7 +57,9 @@ class Resnet34(imagemodels.ResNet):
                 for p in child.parameters():
                     p.requires_grad = False
             
-        self.fc = nn.Linear(512, n_class)
+            for p in self.fc.parameters():
+              p.requires_grad = False
+
 
     def forward(self, x):
         x = self.conv1(x)
@@ -71,6 +74,8 @@ class Resnet34(imagemodels.ResNet):
         embed = x.view(x.size(0), -1)
         x = self.fc(embed)
         return x
+    
+    # def cluster(self, x): # TODO
 
 class Resnet50(imagemodels.ResNet):
     def __init__(self, embedding_dim=1024, pretrained=False):

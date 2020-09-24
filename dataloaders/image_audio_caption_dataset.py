@@ -26,6 +26,7 @@ class ImageAudioCaptionDataset(Dataset):
     self.max_nregions = configs.get('max_num_regions', 5)
     self.max_nphones = configs.get('max_num_phones', 50)
     self.max_nframes = configs.get('max_num_frames', 500)
+    self.segment_level = configs.get('segment_level', 'word')
     self.image_first = configs.get('image_first', True)
     self.audio_keys = []
     self.audio_root_path = audio_root_path
@@ -53,10 +54,20 @@ class ImageAudioCaptionDataset(Dataset):
           segmentation = []
           cur_start = 0
           for word_segment_dict in segment_dicts[k]['data_ids']:
+              dur = 0.
               for phone_segment in word_segment_dict[2]:
-                  dur = phone_segment[2] - phone_segment[1]
-                  segmentation.append([cur_start, cur_start+dur])
-                  cur_start += dur
+                  if self.segment_level == 'phone':
+                    dur = phone_segment[2] - phone_segment[1]
+                    segmentation.append([cur_start, cur_start+dur])
+                    cur_start += dur
+                  elif self.segment_level == 'word':
+                    dur += phone_segment[2] - phone_segment[1]
+                  else:
+                    raise ValueError('Unknown segment level')
+
+              if self.segment_level == 'word':
+                segmentation.append([cur_start, cur_start+dur])
+
           self.segmentations.append(segmentation)
           # if len(self.segmentations) > 30: # XXX
           #   break

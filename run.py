@@ -14,7 +14,7 @@ parser.add_argument('--dataset', choices={'mscoco2k', 'mscoco20k', 'mscoco'})
 parser.add_argument('--audio_model', choices={'lstm', 'tdnn', 'transformer'}, default='lstm')
 parser.add_argument('--image_model', choices={'res34', 'vgg16'}, default='res34')
 parser.add_argument('--alignment_model', choices={'mixture_aligner'}, default='mixture_aligner')
-parser.add_argument('--translate_direction', choices={'sp2im', 'im2sp'}, default='sp2im', help='Translation direction (target -> source)') # TODO
+parser.add_argument('--translate_direction', choices={'sp2im', 'im2sp'}, default='sp2im', help='Translation direction (target -> source)')
 parser.add_argument('--batch_size', '-b', type=int, default=16, help='Batch size')
 parser.add_argument('--optim', choices={'sgd', 'adam'}, default='sgd', help='Type of optimizer')
 parser.add_argument('--lr', type=float, default=1e-5, help='Learning rate')
@@ -23,7 +23,7 @@ parser.add_argument('--weight-decay', type=float, default=5e-7, help='Weight dec
 parser.add_argument('--momentum', type=float, default=0.9, help='Moementum')
 parser.add_argument('--n_epochs', type=int, default=20, help='Number of training epochs')
 parser.add_argument('--n_print_steps', type=int, default=10, help='Print statistics every n_print_steps')
-parser.add_argument('--n_phone_class', type=int, default=49, help='Number of phone unit classes')
+parser.add_argument('--n_word_class', type=int, default=49, help='Number of word unit classes')
 parser.add_argument('--n_concept_class', type=int, default=80, help='Number of image concept classes')
 parser.add_argument('--task', choices={'alignment', 'retrieval', 'both'}, default='retrieval', help='Type of tasks to evaluate')
 parser.add_argument('--start_step', type=int, default=0, help='Starting step of the experiment')
@@ -60,8 +60,8 @@ else:
   with open('data/{}_path.json'.format(args.dataset), 'r') as f:
     path = json.load(f) 
 
-# XXX if args.dataset == 'mscoco2k' or args.dataset == 'mscoco20k':
-#   args.n_concept_class = args.n_phone_class = 65
+if args.dataset == 'mscoco2k' or args.dataset == 'mscoco20k':
+  args.n_concept_class = args.n_word_class = 65
 
 configs = {'max_num_regions': 5,
            'max_num_phones': 50,
@@ -95,31 +95,35 @@ else:
 
 # Initialize the image and audio encoders
 if args.audio_model == 'tdnn':
-  audio_model = TDNN3(n_class=args.n_phone_class)
+  audio_model = TDNN3(n_class=49)
 elif args.audio_model == 'lstm':
   pretrained_model_file = '/ws/ifp-53_2/hasegawa/lwang114/summer2020/exp/blstm3_mscoco_train_sgd_lr_0.00001_mar25/audio_model.7.pth' 
-  audio_model = BLSTM3(n_class=args.n_phone_class,
-                       return_empty=False)
+  audio_model = BLSTM3(n_class=49)
   audio_model.load_state_dict(torch.load(pretrained_model_file))
-elif args.audio_model == 'transformer': # TODO Return non-empty labels only
+elif args.audio_model == 'transformer':
   pretrained_model_file = '/ws/ifp-53_1/hasegawa/tools/espnet/egs/discophone/ifp_lwang114/dump/mscoco/eval/deltafalse/split1utt/data_encoder.pth'
-  audio_model = Transformer(n_class=args.n_phone_class,
+  audio_model = Transformer(n_class=49,
                             pretrained_model_file=pretrained_model_file)
   
 if args.image_model == 'vgg16':
   image_model = VGG16(n_class=args.n_concept_class)
 elif args.image_model == 'res34':
-  image_model = Resnet34(n_class=args.n_concept_class)
+  image_model = Resnet34(n_class=80)
   image_model.load_state_dict(torch.load('/ws/ifp-53_2/hasegawa/lwang114/fall2020/exp/res34_pretrained_model/image_model.14.pth'))
 
 if args.alignment_model == 'mixture_aligner':
   if args.translate_direction == 'sp2im':
-    alignment_model = MixtureAlignmentLogLikelihood(configs={'Ks': args.n_concept_class, 'Kt': args.n_phone_class - 1})
+    alignment_model = MixtureAlignmentLogLikelihood(configs={'Ks': args.n_concept_class, 'Kt': args.n_word_class})
   elif args.translate_direction == 'im2sp':
-    alignment_model = MixtureAlignmentLogLikelihood(configs={'Ks': args.n_phone_class - 1, 'Kt': args.n_concept_class})
+    alignment_model = MixtureAlignmentLogLikelihood(configs={'Ks': args.n_word_class, 'Kt': args.n_concept_class})
     
-# Train the model
 if args.start_step <= 0:
+  # Initialize cluster means. This step may take a while, therefore save the codebooks to skip this step the next time
+  audio_outputs = [audio_model(audio_input, save_features=True)[0].cpu().detach().numpy() for audio_input in train_loader] 
+  audio_model.cluster(torch.stack(audio_outputs), '{}/audio_codebook.npy'.format(args.exp_dir))
+
+if args.start_step <= 1:
+  # Train the model
   if args.translate_direction == 'sp2im':
     train(image_model,
           audio_model,
@@ -143,7 +147,8 @@ if args.start_step <= 0:
           test_loader,
           args)
 
-# Evaluate the model
-if args.start_step <= 1:
+
+if args.start_step <= 2:
   # TODO
+  # Evaluate the model
   print('to-do: evaluate word discovery performance')

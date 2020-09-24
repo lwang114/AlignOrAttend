@@ -101,24 +101,28 @@ class BLSTM3(nn.Module):
     self.return_empty = return_empty
 
     self.rnn1 = BLSTM2(n_class, embedding_dim, batch_first=batch_first)
-    if layer1_pretrain_file:
-      self.rnn1.load_state_dict(torch.load(layer1_pretrain_file))
-    for child in self.rnn1.children():
-      for p in child.parameters():
-        p.requires_grad = False
-      
     self.rnn2 = nn.LSTM(input_size=2*embedding_dim,
                         hidden_size=embedding_dim,
                         num_layers=n_layers,
                         batch_first=batch_first,
                         bidirectional=True)
+
     self.codebook = None
-    self.precision = None 
-    
+    self.precision = None           
+    self.fc = nn.Linear(2 * embedding_dim, n_class)
+
+    if layer1_pretrain_file:
+      self.rnn1.load_state_dict(torch.load(layer1_pretrain_file))      
+
+    for child in self.rnn1.children():
+      for p in child.parameters():
+        p.requires_grad = False
+
     for p in self.rnn2.parameters():
       p.requires_grad = False
-      
-    self.fc = nn.Linear(2 * embedding_dim, n_class)
+    
+    for p in self.fc.parameters():
+      p.requires_grad = False
 
   def forward(self, x,
               save_features=False,
@@ -129,7 +133,10 @@ class BLSTM3(nn.Module):
     h0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim), device=x.device)
     c0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim), device=x.device)
     embed, _ = self.rnn2(x)
-    outputs = [self.fc(embed[b]) for b in range(B)]
+    if self.codebook is None:
+      outputs = [self.fc(embed[b]) for b in range(B)]
+    else:
+      outputs = self.cluster(embed)
 
     if save_features:
       if self.return_empty:
@@ -162,7 +169,7 @@ class BLSTM3(nn.Module):
       T = x.shape[1]
       kmeans = KMeans(n_clusters=n_class)
       self.codebook = kmeans.fit(x.reshape(B*T, -1)).cluster_centers_
-      if out_file:
+      if out_file: # TODO Make it part of the state dict
         np.save(out_file, self.codebook)
       self.codebook = torch.FloatTensor(self.codebook)
       self.precision = 0.1 * torch.ones((1, 1))
