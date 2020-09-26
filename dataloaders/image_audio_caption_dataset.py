@@ -21,7 +21,7 @@ def preemphasis(signal,coeff=0.97):
     return np.append(signal[0],signal[1:]-coeff*signal[:-1])
 
 class ImageAudioCaptionDataset(Dataset):
-  def __init__(self, audio_root_path, image_root_path, segment_file, bbox_file, configs={}):
+  def __init__(self, audio_root_path, image_root_path, segment_file, bbox_file, keep_index_file=None, configs={}):
     self.configs = configs
     self.max_nregions = configs.get('max_num_regions', 5)
     self.max_nphones = configs.get('max_num_phones', 50)
@@ -71,34 +71,39 @@ class ImageAudioCaptionDataset(Dataset):
                 segmentation.append([cur_start, cur_start+dur])
 
           self.segmentations.append(segmentation)
-          if len(self.segmentations) > 30: # XXX
-            break
+          # if len(self.segmentations) > 30: # XXX
+          #   break
       else:
         for line in f:
           k, phn, start, end = line.strip().split()
           if len(self.audio_keys) == 0:
-            self.segmentations.append(segmentation)
+            self.audio_keys.append(k)
+            self.segmentations.append([[start, end]])
           elif k != self.audio_keys[-1]:
             self.audio_keys.append(k)
             self.segmentations.append([[start, end]])
           else:
             self.segmentations[-1].append([start, end])
-     
-    if bbox_file.split('.')[-1] == 'json':
+          # if len(self.segmentations) > 599: # XXX
+          #   break
+
+    if segment_file.split('.')[-1] == 'json':
+        with open(segment_file, 'r') as fs:
+            image_dicts = json.load(fs) 
+
+        bbox_dict = {} 
         with open(bbox_file, 'r') as fb:
-            image_dicts = json.load(fb) # For synthetic data, image info and segment info are stored in the same file
-            bbox_dict = {}
             for line in fb:
-                k, c, x, y, w, h = line.split()
+                k, c, x, y, w, h = line.strip().split()
                 bbox_dict[k] = [x, y, w, h]
-                
-            for k in sorted(image_dicts, key=lambda x:int(x.split('_')[-1])):
-                image_list = [image_dict[0] for image_dict in image_dicts[k]['data_ids']]                
-                image_file_prefix = ':'.join(image_list)
-                self.image_keys.append(image_file_prefix)
-                self.bboxes.append([bbox_dict[img_id] for img_id in image_list])
-                if len(self.bboxes) > 30: # XXX
-                  break
+
+        for k in sorted(image_dicts, key=lambda x:int(x.split('_')[-1])):
+            image_list = [image_dict[0] for image_dict in image_dicts[k]['data_ids']]                
+            image_file_prefix = ':'.join(image_list)
+            self.image_keys.append(image_file_prefix)
+            self.bboxes.append([bbox_dict[img_id] for img_id in image_list])
+            # if len(self.bboxes) > 30: # XXX
+            #   break
     elif bbox_file.split('.')[-1] == 'txt':    
         with open(bbox_file, 'r') as f:
           for line in f:
@@ -114,7 +119,14 @@ class ImageAudioCaptionDataset(Dataset):
                   self.bboxes[-1].append([x, y, w, h])
     elif bbox_file.split('.')[-1] == 'npz': # If bbox file is npz format, assume the features are already extracted 
         self.bboxes = np.load(bbox_file) 
-        self.image_keys = sorted(self.bboxes, key=lambda x:int(x.split('_')[-1])) 
+        self.image_keys = sorted(self.bboxes, key=lambda x:int(x.split('_')[-1])) # XXX
+    
+    self.keep_indices = None
+    if keep_index_file:
+        with open(keep_index_file, 'r') as f:
+            self.keep_indices = [i for i, line in enumerate(f) if int(line)] # XXX
+    else:
+        self.keep_indices = list(range(len(self.audio_keys)))
 
   def __getitem__(self, idx):
     if torch.is_tensor(idx):
@@ -128,6 +140,7 @@ class ImageAudioCaptionDataset(Dataset):
         return mfcc, regions, phone_boundary, region_mask
   
   def load_audio(self, idx):
+    idx = self.keep_indices[idx]
     # Extract segment-level acoustic features
     self.n_mfcc = self.configs.get('n_mfcc', 40)
     self.coeff = self.configs.get('coeff', 0.97)
@@ -138,7 +151,7 @@ class ImageAudioCaptionDataset(Dataset):
     phone_boundary = np.zeros(self.max_nframes+1)
     for i_s, segment in enumerate(self.segmentations[idx]):
       start_ms, end_ms = segment
-      start_frame, end_frame = int(start_ms / 10), int(end_ms / 10)
+      start_frame, end_frame = int(float(start_ms) / 10), int(float(end_ms) / 10)
       if end_frame > self.max_nframes:
         break
       phone_boundary[start_frame] = 1.
@@ -174,6 +187,7 @@ class ImageAudioCaptionDataset(Dataset):
     return mfcc, phone_boundary
 
   def load_image(self, idx):
+    idx = self.keep_indices[idx]
     self.width = self.configs.get('width', 224)
     self.height = self.configs.get('height', 224)
     RGB_mean = self.configs.get('RGB_mean', [0.485, 0.456, 0.406])
@@ -186,14 +200,12 @@ class ImageAudioCaptionDataset(Dataset):
     regions = []
     region_mask = np.zeros(self.max_nregions+1)
     if self.bbox_file.split('.')[-1] == 'npz':
-        regions = torch.FloatTensor(self.bbox_file[self.image_keys[idx]])
-        if len(regions) < max_n_regions:
-            regions = torch.cat((regions, torch.zeros((max_n_regions-len(regions), regions.size(-1)))))
+        regions = torch.FloatTensor(self.bboxes[self.image_keys[idx]][:self.max_nregions])
+        if len(regions) < self.max_nregions:
+            regions = torch.cat((regions, torch.zeros((self.max_nregions-len(regions), regions.size(-1)))))
         # TODO Handle empty region
-        # if len(regions) == 0:
-        #    print('Warning: empty image')
-        region_mask[:len(regions)+1] = 1.
-    else:
+        region_mask[:min(len(regions), self.max_nregions)+1] = 1.
+    else: 
         for i_b, bbox in enumerate(self.bboxes[idx]):
           if i_b > self.max_nregions:
             break
@@ -228,7 +240,7 @@ class ImageAudioCaptionDataset(Dataset):
     return regions, region_mask
 
   def __len__(self):
-    return len(self.audio_keys)
+    return len(self.keep_indices)
 
   def convert_to_fixed_length(self, mfcc):
     T = mfcc.shape[1] 

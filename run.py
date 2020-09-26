@@ -6,7 +6,6 @@ import torch
 import torch.nn as nn
 import numpy as np
 import models
-from models.AudioModels import BLSTMEncoder
 from steps.traintest import train, validate, initialize_clusters  
 from dataloaders.image_audio_caption_dataset import ImageAudioCaptionDataset
 
@@ -14,7 +13,7 @@ parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFo
 parser.add_argument('--exp_dir', '-e', type=str, help='Experimental directory')
 parser.add_argument('--dataset', choices={'mscoco2k', 'mscoco20k', 'mscoco'})
 parser.add_argument('--audio_model', choices={'lstm', 'tdnn', 'transformer'}, default='lstm')
-parser.add_argument('--image_model', choices={'res34', 'rcnn'}, default='res34')
+parser.add_argument('--image_model', choices={'res34', 'rcnn', 'linear'}, default='res34')
 parser.add_argument('--segment_level', choices={'word', 'phone'}, default='word')
 parser.add_argument('--alignment_model', choices={'mixture_aligner'}, default='mixture_aligner')
 parser.add_argument('--retrieval_model', choices={None, 'linear_retriever'}, default=None)
@@ -58,8 +57,19 @@ if not os.path.isfile('data/{}_path.json'.format(args.dataset)):
               'image_root_path_test':'{}/val2014/imgs/val2014/'.format(root),
               'bbox_file_train':'{}/mscoco2k/{}_bboxes.txt'.format(root, args.dataset),
               'bbox_file_test':'{}/mscoco2k/{}_bboxes.txt'.format(root, args.dataset)}
+    elif args.dataset == 'mscoco':
+        path = {'root': root, 
+                'audio_root_path_train':'{}/train2014/wav/'.format(root),
+                'audio_root_path_test':'{}/val2014/wav/'.format(root),
+                'segment_file_train':'{}/train2014/mscoco_train_word_segments.txt'.format(root, args.dataset),
+                'segment_file_test':'{}/val2014/mscoco_val_word_segments.txt'.format(root, args.dataset),
+                'image_root_path_train':'{}/train2014/imgs/val2014/'.format(root),
+                'image_root_path_test':'{}/val2014/imgs/val2014/'.format(root),
+                'bbox_file_train':'{}/train2014/mscoco_train_res34_embed512dim_with_whole_image.npz'.format(root),
+                'bbox_file_test':'{}/val2014/mscoco_val_res34_embed512dim_with_whole_image.npz'.format(root),
+                'retrieval_split_file':'{}/val2014/mscoco_val_split.txt'.format(root)}
     else:
-      raise ValueError('Data path file not found')
+      raise ValueError('Dataset {} not supported yet'.format(args.dataset))
     json.dump(path, f, indent=4, sort_keys=True)
 else:
   with open('data/{}_path.json'.format(args.dataset), 'r') as f:
@@ -98,7 +108,7 @@ else:
     configs['image_first'] = False
 
   image_encoder_configs = {'n_class': args.n_concept_class,
-                           'embedding_dim': 512 if args.image_model == 'res34' else 2048,
+                           'embedding_dim': 512 if args.image_model == 'res34' or args.image_model == 'linear' else 2048,
                            'softmax_activation': 'gaussian',
                            'precision': 0.1,
                            'pretrained_model': '/ws/ifp-53_2/hasegawa/lwang114/fall2020/exp/res34_pretrained_model/image_model.14.pth',
@@ -142,11 +152,11 @@ if args.audio_model == 'transformer':
 else:
   train_loader = torch.utils.data.DataLoader(
     ImageAudioCaptionDataset(path['audio_root_path_train'], path['image_root_path_train'], path['segment_file_train'], path['bbox_file_train'], configs=configs),
-    batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True
+    batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=True
   )
   test_loader = torch.utils.data.DataLoader(  
-    ImageAudioCaptionDataset(path['audio_root_path_test'], path['image_root_path_test'], path['segment_file_test'], path['bbox_file_test'], configs=configs),
-    batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True
+    ImageAudioCaptionDataset(path['audio_root_path_test'], path['image_root_path_test'], path['segment_file_test'], path['bbox_file_test'], keep_index_file=path['retrieval_split_file'], configs=configs),
+    batch_size=args.batch_size, shuffle=False, num_workers=1, pin_memory=True
   )
 
 # Initialize the image and audio encoders
@@ -159,10 +169,10 @@ elif args.audio_model == 'transformer': # TODO
   audio_model = models.Transformer(n_class=49,
                             pretrained_model_file=pretrained_model_file)
   
-if args.image_model == 'vgg16': # TODO
-  image_model = VGG16(n_class=65)
-elif args.image_model == 'res34':
-  image_model = models.ResnetEncoder(image_encoder_configs) # TODO
+if args.image_model == 'res34':
+  image_model = models.ResnetEncoder(image_encoder_configs)
+elif args.image_model == 'linear' or args.image_model == 'rcnn':
+  image_model = models.LinearEncoder(image_encoder_configs)
 
 audio_segment_model = models.NoopSegmenter(audio_segmenter_configs)
 image_segment_model = models.NoopSegmenter(image_segmenter_configs)
@@ -176,7 +186,7 @@ if args.alignment_model == 'mixture_aligner':
 retriever = None
 if args.retrieval_model is not None:
     if args.retrieval_model == 'linear_retriever':
-        retriever = model.LinearRetriever(retriever_configs)
+        retriever = models.LinearRetriever(retriever_configs)
 
 if args.start_step <= 0:
   # Initialize acoustic and visual codebooks. This step may take a while, therefore save the codebooks to skip this step the next time

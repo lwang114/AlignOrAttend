@@ -70,7 +70,7 @@ class BLSTMEncoder(nn.Module):
       self.clf = Linear(2*self.embedding_dim, self.n_class)
     elif self.activation == 'gaussian':
       self.codebook = nn.Parameter(torch.randn(self.n_class, 2*self.embedding_dim),
-                                   requires_grad=True)
+                                   requires_grad=False) # XXX
       self.clf = NegativeSquare(self.codebook, self.precision)
 
   def forward(self, x, save_features=False):
@@ -142,6 +142,7 @@ class BLSTM3(nn.Module):
     if layer1_pretrain_file:
       self.rnn1.load_state_dict(torch.load(layer1_pretrain_file))      
 
+    '''
     for child in self.rnn1.children():
       for p in child.parameters():
         p.requires_grad = False
@@ -151,6 +152,7 @@ class BLSTM3(nn.Module):
     
     for p in self.fc.parameters():
       p.requires_grad = False
+    '''
 
   def forward(self, x,
               save_features=False):

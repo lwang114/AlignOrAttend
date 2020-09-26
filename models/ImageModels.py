@@ -16,7 +16,7 @@ class ResnetEncoder(nn.Module):
         self.precision = configs.get('precision', 0.1)
         pretrained_model_file = configs.get('pretrained_model', None)
         
-        self.resnet = Resnet34(n_class=self.n_class) 
+        self.resnet = Resnet34(n_class=65) 
         if pretrained_model_file:
             self.resnet.load_state_dict(torch.load(pretrained_model_file))
 
@@ -157,9 +157,25 @@ class VGG16(nn.Module):
         x = self.image_model(x)
         return x
 
-class NoopEncoder(nn.Module):
-    def __init__(self, embedding_dim=1024, pretrained=False):
-      self.embedding_dim=embedding_dim
-        
-    def forward(self, x):
-      return x     
+class LinearEncoder(nn.Module):
+    def __init__(self, configs):
+      super(LinearEncoder, self).__init__()
+      self.n_class = configs.get('n_class', 80)
+      self.embedding_dim = configs.get('embedding_dim', 512)
+      self.activation = configs.get('softmax_activation', 'gaussian')
+      self.codebook = None
+      self.precision = configs.get('precision', 0.1)
+
+      if self.activation == 'linear':
+          self.clf = Linear(self.embedding_dim, self.n_class)
+      elif self.activation == 'gaussian':
+          self.codebook = nn.Parameter(torch.randn(self.n_class, self.embedding_dim), requires_grad=False) # XXX
+          self.precision = nn.Parameter(self.precision*torch.ones(1, requires_grad=False))
+          self.clf = NegativeSquare(self.codebook, self.precision)
+
+    def forward(self, x, save_features=False):
+      out = self.clf(x)
+      if save_features:
+        return x, out
+      else:
+        return out  

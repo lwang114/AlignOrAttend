@@ -116,6 +116,7 @@ def train(source_model, target_model,
 
             target_embed, target_output = target_model(target_input, save_features=True)
             source_embed, source_output = source_model(source_input, save_features=True)
+            
             # Compute source and target outputs
             # TODO Do this within the encoder class            
             source_pooling_ratio = round(source_input.size(1) / source_output.size(1))
@@ -139,12 +140,14 @@ def train(source_model, target_model,
 
             # Convert the segmentations to masks
             source_output, source_mask, _ = source_segment_model(source_output, source_segmentation)
+            # source_embed, _, _ = source_segment_model(source_embed, source_segmentation)
             target_output, target_mask, _ = target_segment_model(target_output, target_segmentation)
+            # target_embed, _, _ = target_segment_model(target_embed, target_segmentation)
 
             align_loss = -alignment_model(source_output, target_output, source_mask, target_mask)
             if retriever is not None:
                 retrieve_loss = retriever.loss(source_embed, target_embed) 
-                loss = retrieve_loss + align_loss
+                loss = retrieve_loss # + align_loss
             else:
                 loss = align_loss
 

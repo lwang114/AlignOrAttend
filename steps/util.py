@@ -9,7 +9,7 @@ def calc_recalls(image_outputs,
                  region_masks, 
                  phone_boundaries, 
                  alignment_model, 
-                 retriever=None
+                 retriever=None,
                  nregions=None):
     """
 	Computes recall at 1, 5, and 10 given encoded image and audio outputs.

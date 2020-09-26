@@ -43,7 +43,7 @@ class MixtureAlignmentLogLikelihood(nn.Module):
     
     # Compute log likelihood
     P_st = torch.FloatTensor(self.P_st).to(src_sent.device)
-    prob_z_it_given_y = torch.sum(src_sent, dim=1) / torch.sum(src_boundary, dim=1).unsqueeze(-1)
+    prob_z_it_given_y = (src_boundary.unsqueeze(-1) * src_sent).sum(1) / src_boundary.sum(-1).unsqueeze(-1)
     prob_x_t_given_y = torch.matmul(torch.matmul(prob_z_it_given_y, P_st).unsqueeze(1), torch.transpose(trg_sent, 1, 2)).squeeze(1)
     EPStensor = torch.FloatTensor(EPS*np.ones((B, 1))).to(src_sent.device)
     log_prob_x_given_y = torch.log(torch.max(prob_x_t_given_y, EPStensor))
@@ -176,7 +176,7 @@ class MixtureAlignmentLogLikelihood(nn.Module):
       T = Ts[b]
       V_src = src_sent[b]
       V_trg = trg_sent[b]
-      P_a = V_src @ self.P_st @ V_trg.T
+      P_a = V_src @ self.P_st @ V_trg.T / L
       alignment = np.argmax(P_a, axis=0)[:T]
       align_prob = np.prod(np.max(P_a[:T], axis=0))
       cluster_prob = deepcopy(V_src)
