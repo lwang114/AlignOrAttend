@@ -7,19 +7,21 @@ import pickle
 from .util import *
 import logging
 import json
+from sklearn.cluster import KMeans
 
 logger = logging.getLogger(__name__)
 def train(source_model, target_model,
           source_segment_model, target_segment_model,
           alignment_model,
           train_loader, test_loader,
-          args):
-    device = torch.device(args.device if torch.cuda.is_available() and args.device.split(':')[0]=='cuda' else "cpu")
+          args, retriever=None): # TODO Make retriever non-optional
+    device = torch.device(args.device if torch.cuda.is_available() and args.device.split(':')[0]=='cuda' else "cpu") 
     torch.set_grad_enabled(True)
     # Initialize all of the statistics we want to keep track of
     batch_time = AverageMeter()
     data_time = AverageMeter()
     loss_meter = AverageMeter()
+    align_loss_meter = AverageMeter()
     progress = []
     best_epoch, best_acc = 0, -np.inf
     global_step, epoch = 0, 0
@@ -54,14 +56,16 @@ def train(source_model, target_model,
     '''
     
     if epoch != 0:
-        source_model.load_state_dict(torch.load("%s/models/target_model.%d.pth" % (exp_dir, epoch)))
-        target_model.load_state_dict(torch.load("%s/models/source_model.%d.pth" % (exp_dir, epoch)))
+        source_model.load_state_dict(torch.load("%s/source_model.%d.pth" % (exp_dir, epoch)))
+        target_model.load_state_dict(torch.load("%s/target_model.%d.pth" % (exp_dir, epoch)))
         # TODO Load parameters for the segmenter and the aligner        
         print("loaded parameters from epoch %d" % epoch)
 
     target_model = target_model.to(device)
     source_model = source_model.to(device)
     alignment_model = alignment_model.to(device)
+    if retriever is not None:
+        retriever = retriever.to(device)
 
     # Set up the optimizer
     target_trainables = [p for p in target_model.parameters() if p.requires_grad]
@@ -79,7 +83,7 @@ def train(source_model, target_model,
         raise ValueError('Optimizer %s is not supported' % args.optim)
 
     if epoch != 0:
-        optimizer.load_state_dict(torch.load("%s/models/optim_state.%d.pth" % (exp_dir, epoch)))
+        optimizer.load_state_dict(torch.load("%s/optim_state.%d.pth" % (exp_dir, epoch)))
         for state in optimizer.state.values():
             for k, v in state.items():
                 if isinstance(v, torch.Tensor):
@@ -110,23 +114,10 @@ def train(source_model, target_model,
             source_segmentation = source_segmentation.to(device)
             optimizer.zero_grad()
 
+            target_embed, target_output = target_model(target_input, save_features=True)
+            source_embed, source_output = source_model(source_input, save_features=True)
             # Compute source and target outputs
-            if len(source_input.size()) >= 5: # Collapse the first two dimensions if image input includes multiple regions per image
-                L = source_input.size(1)
-                source_input_4d = source_input.view(B*L, source_input.size(2), source_input.size(3), source_input.size(4))
-                source_output = source_model(source_input_4d)
-                source_output = source_output.view(B, L, -1)
-            else:
-                source_output = source_model(source_input)
-            
-            if len(target_input.size()) >= 5:
-                L = target_input.size(1)
-                target_input_4d = target_input.view(B*L, target_input.size(2), target_input.size(3), target_input.size(4))
-                target_output = target_model(target_input_4d)
-                target_output = target_output.view(B, L, -1)
-            else:
-                target_output = target_model(target_input)
-            
+            # TODO Do this within the encoder class            
             source_pooling_ratio = round(source_input.size(1) / source_output.size(1))
             target_pooling_ratio = round(target_input.size(1) / target_output.size(1))
 
@@ -150,12 +141,20 @@ def train(source_model, target_model,
             source_output, source_mask, _ = source_segment_model(source_output, source_segmentation)
             target_output, target_mask, _ = target_segment_model(target_output, target_segmentation)
 
-            loss = -alignment_model(source_output, target_output, source_mask, target_mask)
+            align_loss = -alignment_model(source_output, target_output, source_mask, target_mask)
+            if retriever is not None:
+                retrieve_loss = retriever.loss(source_embed, target_embed) 
+                loss = retrieve_loss + align_loss
+            else:
+                loss = align_loss
+
             alignment_model.EMstep(source_output, target_output, source_mask, target_mask)
+            
             loss.backward()
             optimizer.step()
 
             # record loss
+            align_loss_meter.update(align_loss.item(), B)
             loss_meter.update(loss.item(), B)
             batch_time.update(time.time() - end_time)
 
@@ -163,15 +162,17 @@ def train(source_model, target_model,
                 print('Epoch: [{0}][{1}/{2}]\t'
                       'Time {batch_time.val:.3f}s ({batch_time.avg:.3f}s)\t'
                       'Data {data_time.val:.3f}s ({data_time.avg:.3f}s)\t'
-                  'Loss total {loss_meter.val:.4f} ({loss_meter.avg:.4f})'.format(
+                      'Align loss {align_loss_meter.val:.4f} ({align_loss_meter.avg:.4f})\t'
+                      'Loss total {loss_meter.val:.4f} ({loss_meter.avg:.4f})'.format(
                    epoch, i, len(train_loader), batch_time=batch_time,
-                   data_time=data_time, loss_meter=loss_meter))
+                   data_time=data_time, align_loss_meter=align_loss_meter, loss_meter=loss_meter))
                 logger.info('Epoch: [{0}][{1}/{2}]\t'
                             'Time {batch_time.val:.3f}s ({batch_time.avg:.3f}s)\t'
-                            'Data {data_time.val:.3f}s ({data_time.avg:.3f}s)\t'
-                  'Loss total {loss_meter.val:.4f} ({loss_meter.avg:.4f})'.format(
+                            'Data {data_time.val:.3f}s ({data_time.avg:.3f}s)\t' 
+                            'Align loss {align_loss_meter.val:.4f} ({align_loss_meter.avg:.4f})\t'
+                            'Loss total {loss_meter.val:.4f} ({loss_meter.avg:.4f})'.format(
                    epoch, i, len(train_loader), batch_time=batch_time,
-                   data_time=data_time, loss_meter=loss_meter))
+                   data_time=data_time, align_loss_meter=align_loss_meter, loss_meter=loss_meter))
                 if np.isnan(loss_meter.avg):
                     print("training diverged...")
                     return
@@ -180,7 +181,7 @@ def train(source_model, target_model,
             global_step += 1
 
         alignment_model.reset()
-        if epoch % 10 == 0:
+        if (epoch + 1) % 10 == 0:
             # TODO Save parameters for the aligner and the segmenter
             torch.save(target_model.state_dict(),
                 "%s/target_model.%d.pth" % (exp_dir, epoch))
@@ -199,10 +200,14 @@ def train(source_model, target_model,
                                 "%s/best_target_model.pth" % (exp_dir))
                 shutil.copyfile("%s/source_model.%d.pth" % (exp_dir, epoch), 
                                 "%s/best_source_model.pth" % (exp_dir))
-        _save_progress()
+            _save_progress()
         epoch += 1
 
-def validate(source_model, target_model, source_segment_model, target_segment_model, alignment_model, val_loader, args):
+def validate(source_model, target_model, 
+             source_segment_model, target_segment_model, 
+             alignment_model, 
+             val_loader, args,
+             retriever=None):
     device = torch.device(args.device if torch.cuda.is_available() and args.device.split(':')[0]=='cuda' else "cpu")
     batch_time = AverageMeter()
     # if not isinstance(target_model, torch.nn.DataParallel):
@@ -211,9 +216,16 @@ def validate(source_model, target_model, source_segment_model, target_segment_mo
     #     source_model = nn.DataParallel(source_model, device_ids=[device])
     target_model = target_model.to(device)
     source_model = source_model.to(device)
+    target_segment_model = target_segment_model.to(device)
+    source_segment_model = source_segment_model.to(device)
     # switch to evaluate mode
     source_model.eval()
     target_model.eval()
+    source_segment_model.eval()
+    target_segment_model.eval()
+    alignment_model.eval()
+    if retriever is not None:
+        retriever.eval()
 
     end = time.time()
     N_examples = val_loader.dataset.__len__()
@@ -232,22 +244,9 @@ def validate(source_model, target_model, source_segment_model, target_segment_mo
             source_segmentation = source_segmentation.to(device)
 
             # Compute source and target outputs
-            if len(source_input.size()) >= 5: # Collapse the first two dimensions if image input includes multiple regions per image
-                L = source_input.size(1)
-                source_input = source_input.view(B*L, source_input.size(2), source_input.size(3), source_input.size(4))
-                source_output = source_model(source_input)
-                source_output = source_output.view(B, L, -1)
-            else:
-                source_output = source_model(source_input)
-            
-            if len(target_input.size()) >= 5:
-                L = target_input.size(1)
-                target_input = target_input.view(B*L, target_input.size(2), source_input.size(3), source_input.size(4))
-                target_output = target_model(target_input)
-                target_output = target_output.view(B, L, -1)
-            else:
-                target_output = target_model(target_input)
-            
+            source_output = source_model(source_input)
+            target_output = target_model(target_input)
+
             source_output = source_output.cpu().detach()
             target_output = target_output.cpu().detach()
 
@@ -291,7 +290,9 @@ def validate(source_model, target_model, source_segment_model, target_segment_mo
         source_masks = torch.cat(source_masks)
         target_masks = torch.cat(target_masks)
 
-        recalls = calc_recalls(source_output, target_output, source_masks, target_masks, alignment_model)
+        recalls = calc_recalls(source_output, target_output, 
+                               source_masks, target_masks, 
+                               alignment_model, retriever=retriever)
         A_r10 = recalls['A_r10']
         I_r10 = recalls['I_r10']
         A_r5 = recalls['A_r5']
@@ -317,3 +318,40 @@ def validate(source_model, target_model, source_segment_model, target_segment_mo
     with open('{}/alignment.json'.format(args.exp_dir), 'w') as f:
       json.dump(align_results, f, indent=4, sort_keys=True)
     return recalls
+
+def initialize_clusters(encode_model,
+                        segment_model,
+                        alignment_model,
+                        train_loader,
+                        model_type,
+                        configs):
+    out_feats = []
+    for ex, batch in enumerate(train_loader):
+        # if ex > 2: # XXX
+        #   break
+        if model_type == 'src':
+            in_feat, _, in_segment, _ = batch
+        elif model_type == 'trg':
+            _, in_feat, _, in_segment = batch
+        B = in_feat.size(0)
+        out_feat = encode_model(in_feat, save_features=True)[0]
+
+        pooling_ratio = round(in_feat.size(1) / out_feat.size(1)) # TODO Do this inside the encoder
+        if pooling_ratio > 1: 
+            out_segment = np.zeros((B, in_segment.size(-1) // pooling_ratio))
+            for b in range(B):
+                segment_times = np.nonzero(in_segment[b].cpu().numpy())[0] // pooling_ratio
+                out_segment[b, segment_times] = 1.
+            out_segment = torch.FloatTensor(out_segment).to(device=in_feat.device)
+        else:
+            out_segment = in_segment
+
+        out_feat, mask, _ = segment_model(out_feat, out_segment) 
+        out_feat = torch.cat(torch.split(out_feat, 1), dim=1).squeeze(0)
+        keep = np.nonzero(mask.cpu().numpy().flatten(order='C'))[0]
+        out_feats.append(out_feat[keep].cpu().detach().numpy())
+        
+    out_feats = np.concatenate(out_feats)
+    codebook = KMeans(n_clusters=configs['n_class']).fit(out_feats).cluster_centers_
+    np.save(configs['codebook_file'], codebook)
+    return nn.Parameter(torch.FloatTensor(codebook), requires_grad=True)

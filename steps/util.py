@@ -4,7 +4,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-def calc_recalls(image_outputs, audio_outputs, region_masks, phone_boundaries, alignment_model, nregions=None):
+def calc_recalls(image_outputs, 
+                 audio_outputs, 
+                 region_masks, 
+                 phone_boundaries, 
+                 alignment_model, 
+                 retriever=None
+                 nregions=None):
     """
 	Computes recall at 1, 5, and 10 given encoded image and audio outputs.
 	"""
@@ -16,8 +22,15 @@ def calc_recalls(image_outputs, audio_outputs, region_masks, phone_boundaries, a
       _, _, S[i], _ = alignment_model.discover(image_outputs, cur_audio_outputs, region_masks, cur_phone_boundaries)
 
     S = torch.FloatTensor(S)
-    A2I_scores, A2I_ind = S.topk(10, 0)
-    I2A_scores, I2A_ind = S.topk(10, 1)
+    if retriever is not None:
+        S_r = retriever(image_outputs, audio_outputs)
+        S_A2I = S * S_r.softmax(0)
+        S_I2A = S * S_r.softmax(1)
+    else:
+        S_A2I = S_I2A = S
+    
+    A2I_scores, A2I_ind = S_A2I.topk(10, 0)
+    I2A_scores, I2A_ind = S_I2A.topk(10, 1)
     A_r1 = AverageMeter()
     A_r5 = AverageMeter()
     A_r10 = AverageMeter()
