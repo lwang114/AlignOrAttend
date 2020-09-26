@@ -29,6 +29,8 @@ class ImageAudioCaptionDataset(Dataset):
     self.segment_level = configs.get('segment_level', 'word')
     self.image_first = configs.get('image_first', True)
     self.audio_keys = []
+    self.segment_file = segment_file
+    self.bbox_file = bbox_file
     self.audio_root_path = audio_root_path
     self.segmentations = []
     self.image_keys = []
@@ -69,8 +71,8 @@ class ImageAudioCaptionDataset(Dataset):
                 segmentation.append([cur_start, cur_start+dur])
 
           self.segmentations.append(segmentation)
-          # if len(self.segmentations) > 30: # XXX
-          #   break
+          if len(self.segmentations) > 30: # XXX
+            break
       else:
         for line in f:
           k, phn, start, end = line.strip().split()
@@ -82,10 +84,9 @@ class ImageAudioCaptionDataset(Dataset):
           else:
             self.segmentations[-1].append([start, end])
      
-    if segment_file.split('.')[-1] == 'json':
-        with open(segment_file, 'r') as fi,\
-             open(bbox_file, 'r') as fb:
-            image_dicts = json.load(fi) # For synthetic data, image info and segment info are stored in the same file
+    if bbox_file.split('.')[-1] == 'json':
+        with open(bbox_file, 'r') as fb:
+            image_dicts = json.load(fb) # For synthetic data, image info and segment info are stored in the same file
             bbox_dict = {}
             for line in fb:
                 k, c, x, y, w, h = line.split()
@@ -96,10 +97,10 @@ class ImageAudioCaptionDataset(Dataset):
                 image_file_prefix = ':'.join(image_list)
                 self.image_keys.append(image_file_prefix)
                 self.bboxes.append([bbox_dict[img_id] for img_id in image_list])
-                # if len(self.bboxes) > 30: # XXX
-                #     break
-    else:    
-      with open(bbox_file, 'r') as f:
+                if len(self.bboxes) > 30: # XXX
+                  break
+    elif bbox_file.split('.')[-1] == 'txt':    
+        with open(bbox_file, 'r') as f:
           for line in f:
               k, c, x, y, w, h = line.strip().split() 
               # XXX self.image_keys.append('_'.join(k.split('_')[:-1]))
@@ -111,26 +112,29 @@ class ImageAudioCaptionDataset(Dataset):
                   self.bboxes.append([[x, y, w, h]]) 
               else:
                   self.bboxes[-1].append([x, y, w, h])
-                  
+    elif bbox_file.split('.')[-1] == 'npz': # If bbox file is npz format, assume the features are already extracted 
+        self.bboxes = np.load(bbox_file) 
+        self.image_keys = sorted(self.bboxes, key=lambda x:int(x.split('_')[-1])) 
+
   def __getitem__(self, idx):
     if torch.is_tensor(idx):
       idx = idx.tolist()
 
+    mfcc, phone_boundary = self.load_audio(idx)
+    regions, region_mask = self.load_image(idx)
+    if self.image_first:
+        return regions, mfcc, region_mask, phone_boundary
+    else:
+        return mfcc, regions, phone_boundary, region_mask
+  
+  def load_audio(self, idx):
     # Extract segment-level acoustic features
     self.n_mfcc = self.configs.get('n_mfcc', 40)
     self.coeff = self.configs.get('coeff', 0.97)
     self.dct_type = self.configs.get('dct_type', 3)
     self.skip_ms = self.configs.get('skip_size', 10)
     self.window_ms = self.configs.get('window_len', 25)
-    self.width = self.configs.get('width', 224)
-    self.height = self.configs.get('height', 224)
-    RGB_mean = self.configs.get('RGB_mean', [0.485, 0.456, 0.406])
-    RGB_std = self.configs.get('RGB_std', [0.229, 0.224, 0.225])
-    self.transform = self.configs.get('transform', transforms.Compose([transforms.Resize(256),
-                                                                  transforms.CenterCrop(224),
-                                                                  transforms.ToTensor(),
-                                                                  transforms.Normalize(mean=RGB_mean, std=RGB_std)]))
-    
+
     phone_boundary = np.zeros(self.max_nframes+1)
     for i_s, segment in enumerate(self.segmentations[idx]):
       start_ms, end_ms = segment
@@ -163,48 +167,66 @@ class ImageAudioCaptionDataset(Dataset):
         nframes = min(mfcc.shape[1], self.max_nframes)
         mfcc = self.convert_to_fixed_length(mfcc)
         mfcc = mfcc.T
-      
+    
+    mfcc = torch.FloatTensor(mfcc)
+    phone_boundary = torch.FloatTensor(phone_boundary)
+
+    return mfcc, phone_boundary
+
+  def load_image(self, idx):
+    self.width = self.configs.get('width', 224)
+    self.height = self.configs.get('height', 224)
+    RGB_mean = self.configs.get('RGB_mean', [0.485, 0.456, 0.406])
+    RGB_std = self.configs.get('RGB_std', [0.229, 0.224, 0.225])
+    self.transform = self.configs.get('transform', transforms.Compose([transforms.Resize(256),
+                                                                  transforms.CenterCrop(224),
+                                                                  transforms.ToTensor(),
+                                                                  transforms.Normalize(mean=RGB_mean, std=RGB_std)])) 
     # Extract visual features 
     regions = []
     region_mask = np.zeros(self.max_nregions+1)
-    for i_b, bbox in enumerate(self.bboxes[idx]):
-      if i_b > self.max_nregions:
-        break
-      x, y, w, h = bbox 
-      x, y, w, h = int(x), int(y), np.maximum(int(w), 1), np.maximum(int(h), 1)
-      if ':' in self.image_keys[idx]:
-          image = Image.open('{}/{}.jpg'.format(self.image_root_path, '_'.join(self.image_keys[idx].split(':')[i_b].split('_')[:-1]))).convert('RGB') 
-      else:
-          image = Image.open('{}/{}.jpg'.format(self.image_root_path, '_'.join(self.image_keys[idx].split('_')[:-1]))).convert('RGB')
-      if len(np.array(image).shape) == 2:
-        print('Wrong shape')
-        image = np.tile(np.array(image)[:, :, np.newaxis], (1, 1, 3))
-        image = Image.fromarray(image)
-    
-      region = image.crop(box=(x, y, x + w, y + h))
-      region = self.transform(region)
-      regions.append(region)
-      if len(regions) == self.max_nregions:
-          break
-    region_mask[:len(regions)+1] = 1.  
-    
-    if len(regions) < self.max_nregions:
-        if len(regions) == 0:
-            print('Warning: empty image')
-            regions = [torch.zeros((3, self.height, self.width)) for _ in range(self.max_nregions)]
-        for _ in range(self.max_nregions-len(regions)):
-            regions.append(torch.zeros(regions[0].size()))
-
-    regions = torch.stack(regions, axis=0)
-    mfcc = torch.FloatTensor(mfcc)
-    region_mask = torch.FloatTensor(region_mask)
-    phone_boundary = torch.FloatTensor(phone_boundary)
-
-    if self.image_first:
-        return regions, mfcc, region_mask, phone_boundary
+    if self.bbox_file.split('.')[-1] == 'npz':
+        regions = torch.FloatTensor(self.bbox_file[self.image_keys[idx]])
+        if len(regions) < max_n_regions:
+            regions = torch.cat((regions, torch.zeros((max_n_regions-len(regions), regions.size(-1)))))
+        # TODO Handle empty region
+        # if len(regions) == 0:
+        #    print('Warning: empty image')
+        region_mask[:len(regions)+1] = 1.
     else:
-        return mfcc, regions, phone_boundary, region_mask
- 
+        for i_b, bbox in enumerate(self.bboxes[idx]):
+          if i_b > self.max_nregions:
+            break
+          x, y, w, h = bbox 
+          x, y, w, h = int(x), int(y), np.maximum(int(w), 1), np.maximum(int(h), 1)
+          if ':' in self.image_keys[idx]:
+              image = Image.open('{}/{}.jpg'.format(self.image_root_path, '_'.join(self.image_keys[idx].split(':')[i_b].split('_')[:-1]))).convert('RGB') 
+          else:
+              image = Image.open('{}/{}.jpg'.format(self.image_root_path, '_'.join(self.image_keys[idx].split('_')[:-1]))).convert('RGB')
+          if len(np.array(image).shape) == 2:
+            print('Wrong shape')
+            image = np.tile(np.array(image)[:, :, np.newaxis], (1, 1, 3))
+            image = Image.fromarray(image)
+        
+          region = image.crop(box=(x, y, x + w, y + h))
+          region = self.transform(region)
+          regions.append(region)
+          if len(regions) == self.max_nregions:
+              break
+        region_mask[:len(regions)+1] = 1.  
+    
+        if len(regions) < self.max_nregions:
+            if len(regions) == 0:
+                print('Warning: empty image')
+                regions = [torch.zeros((3, self.height, self.width)) for _ in range(self.max_nregions)]
+            for _ in range(self.max_nregions-len(regions)):
+                regions.append(torch.zeros(regions[0].size()))
+
+        regions = torch.stack(regions, axis=0)
+    
+    region_mask = torch.FloatTensor(region_mask)
+    return regions, region_mask
+
   def __len__(self):
     return len(self.audio_keys)
 

@@ -3,7 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from espnet.nets.pytorch_backend.transformer.encoder import Encoder
 from espnet.nets.pytorch_backend.nets_utils import make_non_pad_mask
-from sklearn.cluster import KMeans
+import numpy as np
+from .NegativeSquare import NegativeSquare
 
 class Transformer(nn.Module):
   def __init__(self, n_class,
@@ -51,6 +52,35 @@ class Transformer(nn.Module):
     else:
       return output
 
+class BLSTMEncoder(nn.Module):
+  def __init__(self, configs):
+    super(BLSTMEncoder, self).__init__()
+    self.n_class = configs.get('n_class', 1000)
+    self.activation = configs.get('softmax_activation', 'gaussian')
+    self.embedding_dim = configs.get('embedding_dim', 200)
+    self.codebook = None
+    self.precision = configs.get('precision', 0.1)
+    pretrained_model_file = configs.get('pretrained_model', None)
+    
+    self.lstm = BLSTM3(49, self.embedding_dim) # XXX Assume the lstm is pretrained on phone clf task
+    if pretrained_model_file:
+      self.lstm.load_state_dict(torch.load(pretrained_model_file))
+      
+    if self.activation == 'linear':
+      self.clf = Linear(2*self.embedding_dim, self.n_class)
+    elif self.activation == 'gaussian':
+      self.codebook = nn.Parameter(torch.randn(self.n_class, 2*self.embedding_dim),
+                                   requires_grad=True)
+      self.clf = NegativeSquare(self.codebook, self.precision)
+
+  def forward(self, x, save_features=False):
+    embed = self.lstm(x, save_features=True)[0]
+    out = self.clf(embed)
+    if save_features:
+      return embed, out
+    else:
+      return out
+    
 class BLSTM2(nn.Module):
   def __init__(self, n_class, embedding_dim=100, n_layers=1, batch_first=True):
     super(BLSTM2, self).__init__()
@@ -86,6 +116,7 @@ class BLSTM2(nn.Module):
     else:
       return torch.stack(outputs, dim=(0 if self.batch_first else 1))
 
+  
 class BLSTM3(nn.Module):
   def __init__(self, n_class,
                embedding_dim=100,
@@ -106,9 +137,6 @@ class BLSTM3(nn.Module):
                         num_layers=n_layers,
                         batch_first=batch_first,
                         bidirectional=True)
-
-    self.codebook = None
-    self.precision = None           
     self.fc = nn.Linear(2 * embedding_dim, n_class)
 
     if layer1_pretrain_file:
@@ -125,59 +153,26 @@ class BLSTM3(nn.Module):
       p.requires_grad = False
 
   def forward(self, x,
-              save_features=False,
-              return_empty=True):
+              save_features=False):
     x, _ = self.rnn1(x, save_features=True) 
     B = x.size(0)
     T = x.size(1)
     h0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim), device=x.device)
     c0 = torch.zeros((2 * self.n_layers, B, self.embedding_dim), device=x.device)
     embed, _ = self.rnn2(x)
-    if self.codebook is None:
-      outputs = [self.fc(embed[b]) for b in range(B)]
-    else:
-      outputs = self.cluster(embed)
-
+    outputs = [self.fc(embed[b]) for b in range(B)]
+    outputs = torch.stack(outputs, dim=(0 if self.batch_first else 1))
+          
     if save_features:
       if self.return_empty:
-        return embed, torch.stack(outputs, dim=(0 if self.batch_first else 1))
+        return embed, outputs
       else: # Assume empty index is 0
-        return embed, torch.stack(outputs, dim=(0 if self.batch_first else 1))[:, :, 1:]
+        return embed, outputs[:, :, 1:]
     else:
       if self.return_empty:
-        return torch.stack(outputs, dim=(0 if self.batch_first else 1))
+        return outputs
       else: # Assume empty index is 0
-        return torch.stack(outputs, dim=(0 if self.batch_first else 1))[:, :, 1:]
-
-  def cluster(self, x,
-              out_file=None,
-              return_score=True,
-              n_class=None):
-    """
-    Args: 
-        x: B x T x D array of acoustic features
- 
-    Returns:
-        p_x: B x T x K array of posterior probabilities 
-             [[[p(c_t=k|x_t) for k in range(K)] for t in range(T)] for b in range(B)]
-    """
-    if not n_class:
-      n_class = self.n_class
-      
-    if self.codebook is None:
-      B = x.shape[0]
-      T = x.shape[1]
-      kmeans = KMeans(n_clusters=n_class)
-      self.codebook = kmeans.fit(x.reshape(B*T, -1)).cluster_centers_
-      if out_file: # TODO Make it part of the state dict
-        np.save(out_file, self.codebook)
-      self.codebook = torch.FloatTensor(self.codebook)
-      self.precision = 0.1 * torch.ones((1, 1))
-      
-    if return_score:
-      score = -(x.unsqueeze(-2) - self.codebook).pow(2).sum(-1)
-      return precision.unsqueeze(0) * score
-
+        return outputs[:, :, 1:]
 
 class TDNN3(nn.Module):
   def __init__(self, n_class, embedding_dim=128):
