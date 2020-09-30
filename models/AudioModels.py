@@ -56,6 +56,7 @@ class BLSTMEncoder(nn.Module):
   def __init__(self, configs):
     super(BLSTMEncoder, self).__init__()
     self.n_class = configs.get('n_class', 1000)
+    self.compute_softmax = configs.get('compute_softmax', False)
     self.activation = configs.get('softmax_activation', 'gaussian')
     self.embedding_dim = configs.get('embedding_dim', 200)
     self.codebook = None
@@ -76,11 +77,51 @@ class BLSTMEncoder(nn.Module):
   def forward(self, x, save_features=False):
     embed = self.lstm(x, save_features=True)[0]
     out = self.clf(embed)
+    if self.compute_softmax:
+      out = out.softmax(-1)
     if save_features:
       return embed, out
     else:
       return out
     
+class DavenetEncoder(nn.Module):
+    def __init__(self, configs):
+        super(DavenetEncoder, self).__init__()
+        input_dim = configs.get('input_dim', 40)
+        self.n_class = configs.get('n_class', 1000)
+        self.compute_softmax = configs.get('compute_softmax', False)
+        self.activation = configs.get('softmax_activation', 'gaussian')
+        self.embedding_dim = configs.get('embedding_dim', 512)
+        self.precision = configs.get('precision', 0.1)       
+        
+        self.batchnorm1 = nn.BatchNorm2d(1)
+        self.conv1 = nn.Conv2d(1, 128, kernel_size=(input_dim,1), stride=(1,1), padding=(0,0))
+        self.conv2 = nn.Conv2d(128, 256, kernel_size=(1,11), stride=(1,1), padding=(0,5))
+        self.conv3 = nn.Conv2d(256, self.embedding_dim, kernel_size=(1,17), stride=(1,1), padding=(0,8))
+        self.pool = nn.MaxPool2d(kernel_size=(1,3), stride=(1,2),padding=(0,1))
+        if self.activation == 'linear':
+            self.clf = Linear(self.embedding_dim, self.n_class)
+        elif self.activation == 'gaussian':
+            self.codebook = nn.Parameter(torch.randn(self.n_class, self.embedding_dim), 
+                                         requires_grad=False)
+            self.clf = NegativeSquare(self.codebook, self.precision)
+
+    def forward(self, x, save_features=False):
+        if x.dim() == 3:
+            x = x.unsqueeze(1)
+        x = x.transpose(2, 3)
+        x = self.batchnorm1(x)
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        # x = self.pool(x)
+        x = F.relu(self.conv3(x))
+        x = x.squeeze(2).transpose(1, 2)
+        out = self.clf(x)
+        if save_features:
+            return x, out
+        else:
+            return out
+
 class BLSTM2(nn.Module):
   def __init__(self, n_class, embedding_dim=100, n_layers=1, batch_first=True):
     super(BLSTM2, self).__init__()
@@ -142,17 +183,15 @@ class BLSTM3(nn.Module):
     if layer1_pretrain_file:
       self.rnn1.load_state_dict(torch.load(layer1_pretrain_file))      
 
-    '''
     for child in self.rnn1.children():
       for p in child.parameters():
-        p.requires_grad = False
+        p.requires_grad = True # XXX
 
     for p in self.rnn2.parameters():
-      p.requires_grad = False
+      p.requires_grad = True # XXX
     
     for p in self.fc.parameters():
-      p.requires_grad = False
-    '''
+      p.requires_grad = False # XXX
 
   def forward(self, x,
               save_features=False):
@@ -175,63 +214,3 @@ class BLSTM3(nn.Module):
         return outputs
       else: # Assume empty index is 0
         return outputs[:, :, 1:]
-
-class TDNN3(nn.Module):
-  def __init__(self, n_class, embedding_dim=128):
-    super(TDNN3, self).__init__()
-    self.embedding_dim = embedding_dim
-    self.batchnorm1 = nn.BatchNorm2d(1)
-    # self.conv1 = nn.Conv2d(1, 128, kernel_size=(40, 3), stride=(1, 1), padding=(0, 1))
-    # XXX
-    '''
-    self.conv1 = nn.Conv2d(1, 32, kernel_size=(40, 3), stride=(1, 1), padding=(0, 1))
-    self.conv2 = nn.Conv2d(32, 64, kernel_size=(1, 5), stride=(1, 1), padding=(0, 2))
-    self.conv3 = nn.Conv2d(64, embedding_dim, kernel_size=(1, 5), stride=(1, 1), padding=(0, 2))
-    self.pool = nn.MaxPool2d(kernel_size=(1, 3), stride=(1, 2), padding=(0, 1)) 
-    # XXX
-    
-    self.avgpool = nn.AvgPool2d(kernel_size=(1, 4), stride=(1, 4), padding=(0, 0))
-    
-    self.fc = nn.Linear(embedding_dim, n_class) 
-    '''
-    '''
-    self.td1 = TDNN(input_dim=input_dim, 
-                    output_dim=10,
-                    context_size=1)
-    self.td2 = TDNN(input_dim=input_dim, 
-                    output_dim=5,
-                    context_size=2)
-    '''
-    self.fc1 = nn.Linear(600, 1000)
-    self.fc2 = nn.Linear(1000, n_class)
-
-  def forward(self, x, save_features=False):
-    '''
-    if x.dim() == 3:
-      x = x.unsqueeze(1)
-    '''
-    x = x.view(x.size(0), -1)
-    '''
-    x = self.batchnorm1(x)
-    x = F.relu(self.conv1(x))
-    # XXX
-    x = self.pool(x)
-    x = F.relu(self.conv2(x))
-    x = self.pool(x)
-    x = F.relu(self.conv3(x))
-    '''
-    '''
-    x = self.avgpool(x)
-    embed = x.squeeze()'''
-    '''
-    embed = torch.mean(x, -1).squeeze()
-    out = self.fc(embed)
-    '''
-    # print(self.fc1.weight.dtype, self.fc1.bias.dtype)
-    embed = F.relu(self.fc1(x))
-    out = self.fc2(embed)
-
-    if save_features:
-      return embed, out
-    else:
-      return out

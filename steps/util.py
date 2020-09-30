@@ -8,24 +8,29 @@ def calc_recalls(image_outputs,
                  audio_outputs, 
                  region_masks, 
                  phone_boundaries, 
-                 alignment_model, 
+                 alignment_model,
+                 args,
                  retriever=None,
-                 nregions=None):
+                 image_embeds=None,
+                 audio_embeds=None):
     """
 	Computes recall at 1, 5, and 10 given encoded image and audio outputs.
 	"""
     n = image_outputs.size(0)
     S = np.zeros((n, n)) 
     for i in range(n):
-      cur_audio_outputs = torch.cat([audio_outputs[i].unsqueeze(0) for j in range(n)])
-      cur_phone_boundaries = torch.cat([phone_boundaries[i].unsqueeze(0) for j in range(n)])
-      _, _, S[i], _ = alignment_model.discover(image_outputs, cur_audio_outputs, region_masks, cur_phone_boundaries)
+        cur_audio_outputs = torch.cat([audio_outputs[i].unsqueeze(0) for j in range(n)])
+        cur_phone_boundaries = torch.cat([phone_boundaries[i].unsqueeze(0) for j in range(n)])
+        if args.translate_direction == 'sp2im':
+            _, _, S[i], _ = alignment_model.discover(image_outputs, cur_audio_outputs, region_masks, cur_phone_boundaries)
+        else:
+            _, _, S[i], _ = alignment_model.discover(cur_audio_outputs, image_outputs, cur_phone_boundaries, region_masks)
 
     S = torch.FloatTensor(S)
-    if retriever is not None:
-        S_r = retriever(image_outputs, audio_outputs)
-        S_A2I = S * S_r.softmax(0)
-        S_I2A = S * S_r.softmax(1)
+    if retriever is not None and image_embeds is not None and audio_embeds is not None:
+        S_r = retriever(image_embeds, audio_embeds)
+        S_A2I = S_r # XXX S * S_r.softmax(0)
+        S_I2A = S_r # XXX S * S_r.softmax(1)
     else:
         S_A2I = S_I2A = S
     

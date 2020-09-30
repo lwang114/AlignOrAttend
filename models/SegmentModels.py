@@ -8,13 +8,16 @@ class NoopSegmenter(nn.Module):
     super(NoopSegmenter, self).__init__()
     self.max_nframes = configs.get('max_nframes', 500)
     self.max_nsegments = configs.get('max_nsegments', 50)
-    
-  def forward(self, x, in_boundary=[]): 
-    B = x.size(0)
-    if in_boundary is None:
-      in_boundary = torch.ones((x.size(0), x.size(1)+1), device=x.device)
+    self.n_intervals = configs.get('n_intervals', 1)
 
-    mask = torch.zeros((B, self.max_nsegments, self.max_nframes))
+  def forward(self, x, in_boundary=[], is_embed=False): 
+    B = x.size(0)
+    L = x.size(1)
+    if in_boundary is None:
+      in_boundary = torch.ones((B, L+1), device=x.device)
+
+    n_intervals = self.n_intervals if is_embed else 1 
+    mask = torch.zeros((B, self.max_nsegments*n_intervals, self.max_nframes))
     for b in range(B):
       segment_times = np.nonzero(in_boundary[b].cpu().detach().numpy())[0]
       if segment_times[0] != 0:
@@ -23,8 +26,17 @@ class NoopSegmenter(nn.Module):
       for t, (start, end) in enumerate(zip(segment_times[:-1], segment_times[1:])):
         if t >= self.max_nsegments or end > self.max_nframes:
           break
-        mask[b, t, start:end] = 1. / (end - start) if end - start > 0 else 1.
+        
+        interval_len = round((end - start) / n_intervals)
+        for i_itvl in range(n_intervals):
+            if interval_len == 0:
+                mask[b, t, ]
+            start_interval = int(start + i_itvl * interval_len)
+            end_interval = int(min(start + (i_itvl + 1) * interval_len, end))
+            cur_interval_len = end_interval - start_interval
+            mask[b, t, start_interval:end_interval] = 1. / cur_interval_len if cur_interval_len > 0 else 0.
 
     mask = torch.FloatTensor(mask).to(x.device)
-    x = torch.matmul(mask, x)
-    return x, mask.sum(-1), in_boundary
+    x = torch.matmul(mask, x).view(B, self.max_nsegments, -1)
+    mask = mask.sum(-1)[:, ::n_intervals]
+    return x, mask, in_boundary

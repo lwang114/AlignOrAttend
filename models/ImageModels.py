@@ -4,17 +4,22 @@ import torch.nn.functional as F
 import torchvision.models as imagemodels
 import torch.utils.model_zoo as model_zoo
 import numpy as np
-from .NegativeSquare import NegativeSquare
+try:
+  from .NegativeSquare import NegativeSquare
+except:
+  from NegativeSquare import NegativeSquare
 
 class ResnetEncoder(nn.Module):
     def __init__(self, configs):
         super(ResnetEncoder, self).__init__()
         self.n_class = configs.get('n_class', 80)
+        self.compute_softmax = configs.get('compute_softmax', False)
         self.activation = configs.get('softmax_activation', 'gaussian')
         self.embedding_dim = configs.get('embedding_dim', 512)
         self.codebook = None
         self.precision = configs.get('precision', 0.1)
         pretrained_model_file = configs.get('pretrained_model', None)
+        codebook_file = configs.get('codebook_file', None)
         
         self.resnet = Resnet34(n_class=65) 
         if pretrained_model_file:
@@ -23,9 +28,12 @@ class ResnetEncoder(nn.Module):
         if self.activation == 'linear':
             self.clf = Linear(self.embedding_dim, self.n_class)
         elif self.activation == 'gaussian':
-            self.codebook = nn.Parameter(torch.randn(self.n_class, self.embedding_dim), requires_grad=True)
-            self.precision = nn.Parameter(self.precision*torch.ones(1, requires_grad=False))
-            self.clf = NegativeSquare(self.codebook, self.precision)
+          if codebook_file:
+            self.codebook = nn.Parameter(torch.FloatTensor(np.load(codebook_file)), requires_grad=False) # XXX
+          else:
+            self.codebook = nn.Parameter(torch.randn(self.n_class, self.embedding_dim), requires_grad=False) # XXX
+          self.precision = nn.Parameter(self.precision*torch.ones(1, requires_grad=False))
+          self.clf = NegativeSquare(self.codebook, self.precision)
         
     def forward(self, x, save_features=False):
         if len(x.size()) >= 5:
@@ -36,11 +44,45 @@ class ResnetEncoder(nn.Module):
         else:
             embed = self.resnet(x, save_features=True)[0]
         out = self.clf(embed)
+
+        if self.compute_softmax:
+          out = out.softmax(-1)
         if save_features:
             return embed, out
         else:
             return out
 
+class LinearEncoder(nn.Module):
+    def __init__(self, configs):
+      super(LinearEncoder, self).__init__()
+      self.n_class = configs.get('n_class', 80)
+      self.compute_softmax = configs.get('compute_softmax', False)
+      self.embedding_dim = configs.get('embedding_dim', 512)
+      self.activation = configs.get('softmax_activation', 'gaussian')
+      self.codebook = None
+      self.precision = configs.get('precision', 0.1)
+      codebook_file = configs.get('codebook_file', None)
+      
+      if self.activation == 'linear':
+          self.clf = Linear(self.embedding_dim, self.n_class)
+      elif self.activation == 'gaussian':
+        if codebook_file:
+          self.codebook = nn.Parameter(torch.FloatTensor(np.load(codebook_file)), requires_grad=False) # XXX
+        else:
+          self.codebook = nn.Parameter(torch.randn(self.n_class, self.embedding_dim), requires_grad=False) # XXX
+        self.precision = nn.Parameter(self.precision*torch.ones(1, requires_grad=False))
+        self.clf = NegativeSquare(self.codebook, self.precision)
+
+    def forward(self, x, save_features=False):
+      out = self.clf(x)
+      if self.compute_softmax:
+        out = out.softmax(-1)
+        
+      if save_features:
+        return x, out
+      else:
+        return out
+          
 class Resnet18(imagemodels.ResNet):
     def __init__(self, embedding_dim=1024, pretrained=False):
         super(Resnet18, self).__init__(imagemodels.resnet.BasicBlock, [2, 2, 2, 2])
@@ -156,26 +198,3 @@ class VGG16(nn.Module):
     def forward(self, x):
         x = self.image_model(x)
         return x
-
-class LinearEncoder(nn.Module):
-    def __init__(self, configs):
-      super(LinearEncoder, self).__init__()
-      self.n_class = configs.get('n_class', 80)
-      self.embedding_dim = configs.get('embedding_dim', 512)
-      self.activation = configs.get('softmax_activation', 'gaussian')
-      self.codebook = None
-      self.precision = configs.get('precision', 0.1)
-
-      if self.activation == 'linear':
-          self.clf = Linear(self.embedding_dim, self.n_class)
-      elif self.activation == 'gaussian':
-          self.codebook = nn.Parameter(torch.randn(self.n_class, self.embedding_dim), requires_grad=False) # XXX
-          self.precision = nn.Parameter(self.precision*torch.ones(1, requires_grad=False))
-          self.clf = NegativeSquare(self.codebook, self.precision)
-
-    def forward(self, x, save_features=False):
-      out = self.clf(x)
-      if save_features:
-        return x, out
-      else:
-        return out  

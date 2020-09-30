@@ -14,7 +14,7 @@ def train(source_model, target_model,
           source_segment_model, target_segment_model,
           alignment_model,
           train_loader, test_loader,
-          args, retriever=None): # TODO Make retriever non-optional
+          args, retriever=None): 
     device = torch.device(args.device if torch.cuda.is_available() and args.device.split(':')[0]=='cuda' else "cpu") 
     torch.set_grad_enabled(True)
     # Initialize all of the statistics we want to keep track of
@@ -44,7 +44,6 @@ def train(source_model, target_model,
         print("  best_epoch = %s" % best_epoch)
         print("  best_acc = %.4f" % best_acc)
 
-    '''
     if not isinstance(target_model, torch.nn.DataParallel) and args.device == 'gpu':
          target_model = nn.DataParallel(target_model, device_ids=[device])
       
@@ -53,7 +52,6 @@ def train(source_model, target_model,
 
     if not isinstance(alignment_model, torch.nn.DataParallel) and args.device == 'gpu':
         alignment_model = nn.DataParallel(alignment_model, device_ids=[device])
-    '''
     
     if epoch != 0:
         source_model.load_state_dict(torch.load("%s/source_model.%d.pth" % (exp_dir, epoch)))
@@ -82,6 +80,7 @@ def train(source_model, target_model,
     else:
         raise ValueError('Optimizer %s is not supported' % args.optim)
 
+    start_epoch = epoch
     if epoch != 0:
         optimizer.load_state_dict(torch.load("%s/optim_state.%d.pth" % (exp_dir, epoch)))
         for state in optimizer.state.values():
@@ -90,8 +89,9 @@ def train(source_model, target_model,
                     state[k] = v.to(device)
         print("loaded state dict from epoch %d" % epoch)
 
-    start_epoch = epoch + 1
-    print("current #steps=%s, #epochs=%s" % (global_step, epoch))
+        start_epoch += 1
+        print("current #steps=%s, #epochs=%s" % (global_step, epoch))
+    
     print("start training...")
 
     target_model.train()
@@ -103,13 +103,15 @@ def train(source_model, target_model,
         target_model.train()
         source_model.train()
 
+        # XXX
+        audio_embeds = {}
         for i, (source_input, target_input, source_segmentation, target_segmentation) in enumerate(train_loader):
             # measure data loading time
             data_time.update(time.time() - end_time)
             B = target_input.size(0)
-
             target_input = target_input.to(device)
             source_input = source_input.to(device)
+            # print(source_input.size(), target_input.size())
             target_segmentation = target_segmentation.to(device)
             source_segmentation = source_segmentation.to(device)
             optimizer.zero_grad()
@@ -117,8 +119,17 @@ def train(source_model, target_model,
             target_embed, target_output = target_model(target_input, save_features=True)
             source_embed, source_output = source_model(source_input, save_features=True)
             
+            # XXX
+            '''
+            if epoch == 0:
+                for b in range(B):
+                    arr_idx = i * args.batch_size + b
+                    if args.translate_direction == 'sp2im':
+                        audio_embeds['arr_{}'.format(arr_idx)] = target_embed[b].cpu().detach().numpy()
+                    elif args.translate_direction == 'im2sp':
+                        audio_embeds['arr_{}'.format(arr_idx)] = source_embed[b].cpu().detach().numpy()
+            '''
             # Compute source and target outputs
-            # TODO Do this within the encoder class            
             source_pooling_ratio = round(source_input.size(1) / source_output.size(1))
             target_pooling_ratio = round(target_input.size(1) / target_output.size(1))
 
@@ -140,19 +151,19 @@ def train(source_model, target_model,
 
             # Convert the segmentations to masks
             source_output, source_mask, _ = source_segment_model(source_output, source_segmentation)
-            # source_embed, _, _ = source_segment_model(source_embed, source_segmentation)
+            source_embed, _, _ = source_segment_model(source_embed, source_segmentation, is_embed=True) # XXX
             target_output, target_mask, _ = target_segment_model(target_output, target_segmentation)
-            # target_embed, _, _ = target_segment_model(target_embed, target_segmentation)
+            target_embed, _, _ = target_segment_model(target_embed, target_segmentation, is_embed=True) # XXX
 
             align_loss = -alignment_model(source_output, target_output, source_mask, target_mask)
             if retriever is not None:
                 retrieve_loss = retriever.loss(source_embed, target_embed) 
-                loss = retrieve_loss # + align_loss
+                loss = retrieve_loss # + align_loss # XXX
             else:
                 loss = align_loss
 
-            alignment_model.EMstep(source_output, target_output, source_mask, target_mask)
-            
+            alignment_model.Estep(source_output, target_output, source_mask, target_mask)
+                     
             loss.backward()
             optimizer.step()
 
@@ -182,20 +193,35 @@ def train(source_model, target_model,
                 
             end_time = time.time()
             global_step += 1
-
+        
+        alignment_model.Mstep()
         alignment_model.reset()
-        if (epoch + 1) % 10 == 0:
-            # TODO Save parameters for the aligner and the segmenter
+        
+        '''
+        if epoch == 0: # XXX
+            print('Saving acoustic embeddings ...')
+            np.savez('{}/acoustic_embeddings.npz'.format(exp_dir), **audio_embeds)
+        '''
+
+        if (epoch + 1) % 1 == 0:
             torch.save(target_model.state_dict(),
                 "%s/target_model.%d.pth" % (exp_dir, epoch))
             torch.save(source_model.state_dict(),
                 "%s/source_model.%d.pth" % (exp_dir, epoch))
             torch.save(optimizer.state_dict(), "%s/optim_state.%d.pth" % (exp_dir, epoch))
-            
-            recalls = validate(source_model, target_model, source_segment_model, target_segment_model, alignment_model, test_loader, args)
+            with open('{}/transprob_{}.json'.format(exp_dir, epoch), 'w') as f:
+                json.dump(alignment_model.P_st.tolist(), f, indent=4, sort_keys=True)
+
+            recalls = validate(source_model, 
+                               target_model, 
+                               source_segment_model, 
+                               target_segment_model, 
+                               alignment_model, 
+                               test_loader, args,
+                               retriever=retriever)
         
             avg_acc = (recalls['A_r10'] + recalls['I_r10']) / 2
-        
+            
             if avg_acc > best_acc:
                 best_epoch = epoch
                 best_acc = avg_acc
@@ -213,10 +239,10 @@ def validate(source_model, target_model,
              retriever=None):
     device = torch.device(args.device if torch.cuda.is_available() and args.device.split(':')[0]=='cuda' else "cpu")
     batch_time = AverageMeter()
-    # if not isinstance(target_model, torch.nn.DataParallel):
-    #     target_model = nn.DataParallel(target_model, device_ids=[device])
-    # if not isinstance(source_model, torch.nn.DataParallel):
-    #     source_model = nn.DataParallel(source_model, device_ids=[device])
+    if not isinstance(target_model, torch.nn.DataParallel):
+        target_model = nn.DataParallel(target_model, device_ids=[device])
+    if not isinstance(source_model, torch.nn.DataParallel):
+        source_model = nn.DataParallel(source_model, device_ids=[device])
     target_model = target_model.to(device)
     source_model = source_model.to(device)
     target_segment_model = target_segment_model.to(device)
@@ -232,10 +258,12 @@ def validate(source_model, target_model,
 
     end = time.time()
     N_examples = val_loader.dataset.__len__()
+    I_outputs = []
+    A_outputs = []
     I_embeddings = [] 
     A_embeddings = [] 
-    source_masks = []
-    target_masks = []
+    image_masks = []
+    audio_masks = []
     frame_counts = []
     align_results = []
     with torch.no_grad():
@@ -247,15 +275,12 @@ def validate(source_model, target_model,
             source_segmentation = source_segmentation.to(device)
 
             # Compute source and target outputs
-            source_output = source_model(source_input)
-            target_output = target_model(target_input)
+            source_embed, source_output = source_model(source_input, save_features=True)
+            target_embed, target_output = target_model(target_input, save_features=True)
 
             source_output = source_output.cpu().detach()
             target_output = target_output.cpu().detach()
 
-            I_embeddings.append(source_output)
-            A_embeddings.append(target_output)
-            
             source_pooling_ratio = round(source_input.size(1) / source_output.size(1))
             target_pooling_ratio = round(target_input.size(1) / target_output.size(1))
             # Downsample the segmentations according to the pooling ratio
@@ -275,10 +300,24 @@ def validate(source_model, target_model,
             
             source_output, source_mask, _ = source_segment_model(source_output, source_segmentation)
             target_output, target_mask, _ = target_segment_model(target_output, target_segmentation)
+            source_embed, _, _ = source_segment_model(source_embed, source_segmentation, is_embed=True)
+            target_embed, _, _ = target_segment_model(target_embed, target_segmentation, is_embed=True)
 
-            source_masks.append(source_mask)
-            target_masks.append(target_mask)
-           
+            if args.translate_direction == 'sp2im':
+                I_outputs.append(source_output)
+                A_outputs.append(target_output)
+                I_embeddings.append(source_embed)
+                A_embeddings.append(target_embed)
+                image_masks.append(source_mask)
+                audio_masks.append(target_mask)
+            else:
+                A_outputs.append(source_output)
+                I_outputs.append(target_output)
+                A_embeddings.append(source_embed)
+                I_embeddings.append(target_embed)
+                audio_masks.append(source_mask)
+                image_masks.append(target_mask) 
+            
             alignments, clusters, _, _ = alignment_model.discover(source_output, target_output, source_mask, target_mask)
             for b, (alignment, cluster) in enumerate(zip(alignments, clusters)):
               align_results.append({'index': i*B+b,
@@ -287,15 +326,18 @@ def validate(source_model, target_model,
             batch_time.update(time.time() - end)
             end = time.time()
 
-        source_output = torch.cat(I_embeddings)
-        target_output = torch.cat(A_embeddings)
+        image_outputs = torch.cat(I_outputs)
+        audio_outputs = torch.cat(A_outputs)
+        image_embeds = torch.cat(I_embeddings)
+        audio_embeds = torch.cat(A_embeddings)
+        image_masks = torch.cat(image_masks)
+        audio_masks = torch.cat(audio_masks)
 
-        source_masks = torch.cat(source_masks)
-        target_masks = torch.cat(target_masks)
+        recalls = calc_recalls(image_outputs, audio_outputs, 
+                               image_masks, audio_masks, 
+                               alignment_model, args, retriever=retriever,
+                               image_embeds=image_embeds, audio_embeds=audio_embeds)        
 
-        recalls = calc_recalls(source_output, target_output, 
-                               source_masks, target_masks, 
-                               alignment_model, retriever=retriever)
         A_r10 = recalls['A_r10']
         I_r10 = recalls['I_r10']
         A_r5 = recalls['A_r5']
@@ -320,6 +362,7 @@ def validate(source_model, target_model,
 
     with open('{}/alignment.json'.format(args.exp_dir), 'w') as f:
       json.dump(align_results, f, indent=4, sort_keys=True)
+
     return recalls
 
 def initialize_clusters(encode_model,
@@ -339,7 +382,7 @@ def initialize_clusters(encode_model,
         B = in_feat.size(0)
         out_feat = encode_model(in_feat, save_features=True)[0]
 
-        pooling_ratio = round(in_feat.size(1) / out_feat.size(1)) # TODO Do this inside the encoder
+        pooling_ratio = round(in_feat.size(1) / out_feat.size(1))
         if pooling_ratio > 1: 
             out_segment = np.zeros((B, in_segment.size(-1) // pooling_ratio))
             for b in range(B):
@@ -349,7 +392,7 @@ def initialize_clusters(encode_model,
         else:
             out_segment = in_segment
 
-        out_feat, mask, _ = segment_model(out_feat, out_segment) 
+        out_feat, mask, _ = segment_model(out_feat, out_segment, is_embed=True) 
         out_feat = torch.cat(torch.split(out_feat, 1), dim=1).squeeze(0)
         keep = np.nonzero(mask.cpu().numpy().flatten(order='C'))[0]
         out_feats.append(out_feat[keep].cpu().detach().numpy())
@@ -357,4 +400,4 @@ def initialize_clusters(encode_model,
     out_feats = np.concatenate(out_feats)
     codebook = KMeans(n_clusters=configs['n_class']).fit(out_feats).cluster_centers_
     np.save(configs['codebook_file'], codebook)
-    return nn.Parameter(torch.FloatTensor(codebook), requires_grad=True)
+    return nn.Parameter(torch.FloatTensor(codebook), requires_grad=False) # XXX

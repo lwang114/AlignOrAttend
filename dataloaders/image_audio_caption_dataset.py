@@ -71,7 +71,7 @@ class ImageAudioCaptionDataset(Dataset):
                 segmentation.append([cur_start, cur_start+dur])
 
           self.segmentations.append(segmentation)
-          # if len(self.segmentations) > 30: # XXX
+          # if len(self.segmentations) > 29: # XXX
           #   break
       else:
         for line in f:
@@ -84,10 +84,10 @@ class ImageAudioCaptionDataset(Dataset):
             self.segmentations.append([[start, end]])
           else:
             self.segmentations[-1].append([start, end])
-          # if len(self.segmentations) > 599: # XXX
-          #   break
+          if len(self.segmentations) > 29: # XXX
+            break
 
-    if segment_file.split('.')[-1] == 'json':
+    if bbox_file.split('.')[-1] == 'txt' and segment_file.split('.')[-1] == 'json':
         with open(segment_file, 'r') as fs:
             image_dicts = json.load(fs) 
 
@@ -119,14 +119,16 @@ class ImageAudioCaptionDataset(Dataset):
                   self.bboxes[-1].append([x, y, w, h])
     elif bbox_file.split('.')[-1] == 'npz': # If bbox file is npz format, assume the features are already extracted 
         self.bboxes = np.load(bbox_file) 
-        self.image_keys = sorted(self.bboxes, key=lambda x:int(x.split('_')[-1])) # XXX
-    
+        self.image_keys = sorted(self.bboxes, key=lambda x:int(x.split('_')[-1]))[:30] # XXX
+
     self.keep_indices = None
     if keep_index_file:
         with open(keep_index_file, 'r') as f:
-            self.keep_indices = [i for i, line in enumerate(f) if int(line)] # XXX
+            self.keep_indices = [i for i, line in enumerate(f)][:30] #if int(line)] # XXX
     else:
         self.keep_indices = list(range(len(self.audio_keys)))
+    print('Number of images = {}, number of captions = {}'.format(len(self.image_keys), len(self.audio_keys)))
+    print('Keep {} image-caption pairs'.format(len(self.keep_indices)))
 
   def __getitem__(self, idx):
     if torch.is_tensor(idx):
@@ -168,7 +170,7 @@ class ImageAudioCaptionDataset(Dataset):
             if audio_filename.split('.')[-1] == 'wav':
                 audio_filename_sph = '.'.join(audio_filename.split('.')[:-1]+['WAV'])
                 sph = SPHFile(self.audio_root_path + audio_filename_sph)
-                sph.write_wav(self.audio_root_path + audio_filename)
+                sph.write_wav(self.audio_root_path + audio_filename_sph)
             sr, y_wav = wavfile.read(self.audio_root_path + audio_filename)
     
         y_wav = preemphasis(y_wav, self.coeff) 
@@ -182,6 +184,9 @@ class ImageAudioCaptionDataset(Dataset):
         mfcc = mfcc.T
     
     mfcc = torch.FloatTensor(mfcc)
+    if phone_boundary.sum() == 0:
+        print('Warning: Caption {} with id {} is empty'.format(idx, self.audio_keys[idx]))
+        phone_boundary[0] = 1.
     phone_boundary = torch.FloatTensor(phone_boundary)
 
     return mfcc, phone_boundary

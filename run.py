@@ -5,6 +5,7 @@ import json
 import torch
 import torch.nn as nn
 import numpy as np
+import logging
 import models
 from steps.traintest import train, validate, initialize_clusters  
 from dataloaders.image_audio_caption_dataset import ImageAudioCaptionDataset
@@ -16,7 +17,7 @@ parser.add_argument('--audio_model', choices={'lstm', 'tdnn', 'transformer'}, de
 parser.add_argument('--image_model', choices={'res34', 'rcnn', 'linear'}, default='res34')
 parser.add_argument('--segment_level', choices={'word', 'phone'}, default='word')
 parser.add_argument('--alignment_model', choices={'mixture_aligner'}, default='mixture_aligner')
-parser.add_argument('--retrieval_model', choices={None, 'linear_retriever'}, default=None)
+parser.add_argument('--retrieval_model', choices={None, 'linear_retriever', 'dotproduct_retriever'}, default=None)
 parser.add_argument('--translate_direction', choices={'sp2im', 'im2sp'}, default='sp2im', help='Translation direction (target -> source)')
 parser.add_argument('--batch_size', '-b', type=int, default=16, help='Batch size')
 parser.add_argument('--optim', choices={'sgd', 'adam'}, default='sgd', help='Type of optimizer')
@@ -29,7 +30,6 @@ parser.add_argument('--n_print_steps', type=int, default=10, help='Print statist
 parser.add_argument('--n_word_class', type=int, default=49, help='Number of word unit classes')
 parser.add_argument('--n_concept_class', type=int, default=80, help='Number of image concept classes')
 parser.add_argument('--task', choices={'alignment', 'retrieval', 'both'}, default='retrieval', help='Type of tasks to evaluate')
-parser.add_argument('--config_file', type=str, default=None, help='Configuration file for the experiment')
 parser.add_argument('--start_step', type=int, default=0, help='Starting step of the experiment')
 parser.add_argument('--resume', action='store_true', help='Resume the experiment')
 parser.add_argument('--device', choices={'cuda:0', 'cuda:1', 'cpu'}, default='cuda:0', help='Device to use')
@@ -39,6 +39,8 @@ if not os.path.isdir('data'):
   os.mkdir('data')
 if not os.path.isdir(args.exp_dir):
   os.mkdir(args.exp_dir)
+
+logging.basicConfig(filename='{}/train.log'.format(args.exp_dir), format='%(asctime)s %(message)s', level=logging.DEBUG)
 
 # Load the data paths
 if not os.path.isfile('data/{}_path.json'.format(args.dataset)):
@@ -58,6 +60,13 @@ if not os.path.isfile('data/{}_path.json'.format(args.dataset)):
               'bbox_file_train':'{}/mscoco2k/{}_bboxes.txt'.format(root, args.dataset),
               'bbox_file_test':'{}/mscoco2k/{}_bboxes.txt'.format(root, args.dataset)}
     elif args.dataset == 'mscoco':
+        if args.image_model == 'linear':
+            image_feat_file_train = '{}/train2014/mscoco_train_res34_embed512dim_with_whole_image.npz'.format(root)
+            image_feat_file_test = '{}/val2014/mscoco_val_res34_embed512dim_with_whole_image.npz'.format(root)
+        elif args.image_model == 'rcnn':
+            image_feat_file_train = '{}/train2014/mscoco_train_rcnn_feature.npz'.format(root)
+            image_feat_file_test = '{}/val2014/mscoco_val_rcnn_feature.npz'.format(root),
+
         path = {'root': root, 
                 'audio_root_path_train':'{}/train2014/wav/'.format(root),
                 'audio_root_path_test':'{}/val2014/wav/'.format(root),
@@ -65,8 +74,8 @@ if not os.path.isfile('data/{}_path.json'.format(args.dataset)):
                 'segment_file_test':'{}/val2014/mscoco_val_word_segments.txt'.format(root, args.dataset),
                 'image_root_path_train':'{}/train2014/imgs/val2014/'.format(root),
                 'image_root_path_test':'{}/val2014/imgs/val2014/'.format(root),
-                'bbox_file_train':'{}/train2014/mscoco_train_res34_embed512dim_with_whole_image.npz'.format(root),
-                'bbox_file_test':'{}/val2014/mscoco_val_res34_embed512dim_with_whole_image.npz'.format(root),
+                'bbox_file_train':image_feat_file_train,
+                'bbox_file_test':image_feat_file_test,
                 'retrieval_split_file':'{}/val2014/mscoco_val_split.txt'.format(root)}
     else:
       raise ValueError('Dataset {} not supported yet'.format(args.dataset))
@@ -82,22 +91,23 @@ if args.dataset == 'mscoco2k' or args.dataset == 'mscoco20k':
   elif args.segment_level == 'word':
     args.n_concept_class = args.n_word_class = 65
 
-if args.config_file:
-  with open(args.config_file, 'r') as f:
+if os.path.isfile('{}/model_configs.json'.format(args.exp_dir)): 
+  with open('{}/model_configs.json'.format(args.exp_dir), 'r') as f:
     model_configs = json.load(f)
     configs = model_configs['batch']
     image_encoder_configs = model_configs['image_encoder']
     audio_encoder_configs = model_configs['audio_encoder']
     image_segmenter_configs = model_configs['image_segmenter']
     audio_segmenter_configs = model_configs['audio_segmenter']
-    aligner_configs = model_configs['aligner']
+    aligner_configs = model_configs['aligner']  
+    retriever_configs = model_configs.get('retriever', {})
 else:
   configs = {'max_num_regions': 10,
              'max_num_phones': 50,
-             'max_num_frames': 500,
-             'segment_level': args.segment_level}
-  if args.audio_model == 'transformer':
-    configs['n_mfcc'] = 83
+             'max_num_frames': 800,
+             'segment_level': args.segment_level, 
+             'n_mfcc': 83 if args.audio_model == 'transformer' else 40}
+  
   if args.translate_direction == 'sp2im':
     configs['image_first'] = True
     aligner_configs = {'Ks': args.n_concept_class,
@@ -106,6 +116,10 @@ else:
                        'T_max': configs['max_num_phones']}
   elif args.translate_direction == 'im2sp':
     configs['image_first'] = False
+    aligner_configs = {'Ks': args.n_word_class,
+                       'Kt': args.n_concept_class,
+                       'L_max': configs['max_num_phones'],
+                       'T_max': configs['max_num_regions']}
 
   image_encoder_configs = {'n_class': args.n_concept_class,
                            'embedding_dim': 512 if args.image_model == 'res34' or args.image_model == 'linear' else 2048,
@@ -113,10 +127,19 @@ else:
                            'precision': 0.1,
                            'pretrained_model': '/ws/ifp-53_2/hasegawa/lwang114/fall2020/exp/res34_pretrained_model/image_model.14.pth',
                            'codebook_file': '{}/image_codebook.npy'.format(args.exp_dir)}
+
+  if args.audio_model == 'tdnn':
+      acoustic_embedding_dim = 512
+  elif args.audio_model == 'lstm':
+      acoustic_embedding_dim = 100
+  elif args.audio_model == 'transformer':
+      acoustic_embedding_dim = 256
+
   audio_encoder_configs = {'n_class': args.n_word_class,
                            'softmax_activation': 'gaussian',
                            'precision': 0.1,
-                           'embedding_dim': 100 if args.audio_model == 'lstm' else 256,
+                           'input_dim': configs['n_mfcc'],   
+                           'embedding_dim': acoustic_embedding_dim,
                            'return_empty': False if args.segment_level == 'phone' else True,
                            'pretrained_model': '/ws/ifp-53_2/hasegawa/lwang114/summer2020/exp/blstm3_mscoco_train_sgd_lr_0.00001_mar25/audio_model.7.pth',
                            'codebook_file': '{}/audio_codebook.npy'.format(args.exp_dir)}
@@ -126,8 +149,12 @@ else:
                              'max_nsegments': configs['max_num_regions']}
   retriever_configs = {}
   if args.retrieval_model is not None:
-    retriever_configs = {'embedding_dim': 2*audio_encoder_configs['embedding_dim'] if args.audio_model == 'lstm' else audio_encoder_configs['embedding_dim'],
-                         'input_dim': image_encoder_configs['embedding_dim']}  
+    if args.translate_direction == 'sp2im':
+        retriever_configs = {'embedding_dim': 2*audio_encoder_configs['embedding_dim'] if args.audio_model == 'lstm' else audio_encoder_configs['embedding_dim'],
+                'input_dim': image_encoder_configs['embedding_dim']}  
+    else:
+        retriever_configs = {'input_dim': 2*audio_encoder_configs['embedding_dim'] if args.audio_model == 'lstm' else audio_encoder_configs['embedding_dim'],
+                'embedding_dim': image_encoder_configs['embedding_dim']}  
 
   model_configs = {'batch': configs,
                    'image_encoder': image_encoder_configs,
@@ -139,12 +166,14 @@ else:
   with open('{}/model_configs.json'.format(args.exp_dir), 'w') as f:
     json.dump(model_configs, f, indent=4, sort_keys=True)
 
+print(model_configs)
+
 # Set up the dataloaders
 if args.audio_model == 'transformer':
   train_loader = torch.utils.data.DataLoader(
     ImageAudioCaptionDataset(path['audio_root_path_train_kaldi'], path['image_root_path_train'], path['segment_file_train'], path['bbox_file_train'], configs=configs),
-    batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True
-  )
+    batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True
+  ) # XXX
   test_loader = torch.utils.data.DataLoader(
     ImageAudioCaptionDataset(path['audio_root_path_test_kaldi'], path['image_root_path_test'], path['segment_file_test'], path['bbox_file_test'], configs=configs),
     batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True
@@ -153,15 +182,15 @@ else:
   train_loader = torch.utils.data.DataLoader(
     ImageAudioCaptionDataset(path['audio_root_path_train'], path['image_root_path_train'], path['segment_file_train'], path['bbox_file_train'], configs=configs),
     batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=True
-  )
+  ) # XXX
   test_loader = torch.utils.data.DataLoader(  
     ImageAudioCaptionDataset(path['audio_root_path_test'], path['image_root_path_test'], path['segment_file_test'], path['bbox_file_test'], keep_index_file=path['retrieval_split_file'], configs=configs),
     batch_size=args.batch_size, shuffle=False, num_workers=1, pin_memory=True
   )
 
 # Initialize the image and audio encoders
-if args.audio_model == 'tdnn': # TODO
-  audio_model = models.TDNN3(n_class=49)
+if args.audio_model == 'tdnn':
+  audio_model = models.DavenetEncoder(audio_encoder_configs)
 elif args.audio_model == 'lstm':
   audio_model = models.BLSTMEncoder(audio_encoder_configs)
 elif args.audio_model == 'transformer': # TODO
@@ -187,6 +216,8 @@ retriever = None
 if args.retrieval_model is not None:
     if args.retrieval_model == 'linear_retriever':
         retriever = models.LinearRetriever(retriever_configs)
+    elif args.retrieval_model == 'dotproduct_retriever':
+        retriever = models.DotProductRetriever(retriever_configs)
 
 if args.start_step <= 0:
   # Initialize acoustic and visual codebooks. This step may take a while, therefore save the codebooks to skip this step the next time
@@ -195,7 +226,8 @@ if args.start_step <= 0:
 
   if os.path.isfile(audio_encoder_configs['codebook_file']):
     codebook = np.load(audio_encoder_configs['codebook_file'])
-    audio_model.codebook = nn.Parameter(torch.FloatTensor(codebook), requires_grad=True)
+    audio_model.codebook = nn.Parameter(torch.FloatTensor(codebook), 
+                                        requires_grad = False) # XXX
   else:
     audio_model.codebook = initialize_clusters(audio_model,
                                                audio_segment_model,
@@ -207,7 +239,8 @@ if args.start_step <= 0:
 
   if os.path.isfile(image_encoder_configs['codebook_file']):
     codebook = np.load(image_encoder_configs['codebook_file']) 
-    image_model.codebook = nn.Parameter(torch.FloatTensor(codebook), requires_grad=True)
+    image_model.codebook = nn.Parameter(torch.FloatTensor(codebook),
+                                        requires_grad = False) # XXX
   else:
     image_model.codebook = initialize_clusters(image_model,
                                              image_segment_model,
