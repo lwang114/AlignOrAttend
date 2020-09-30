@@ -6,8 +6,8 @@ import torch.nn as nn
 
 def calc_recalls(image_outputs, 
                  audio_outputs, 
-                 region_masks, 
-                 phone_boundaries, 
+                 image_masks, 
+                 audio_masks, 
                  alignment_model,
                  args,
                  retriever=None,
@@ -20,15 +20,15 @@ def calc_recalls(image_outputs,
     S = np.zeros((n, n)) 
     for i in range(n):
         cur_audio_outputs = torch.cat([audio_outputs[i].unsqueeze(0) for j in range(n)])
-        cur_phone_boundaries = torch.cat([phone_boundaries[i].unsqueeze(0) for j in range(n)])
+        cur_audio_masks = torch.cat([audio_masks[i].unsqueeze(0) for j in range(n)])
         if args.translate_direction == 'sp2im':
-            _, _, S[i], _ = alignment_model.discover(image_outputs, cur_audio_outputs, region_masks, cur_phone_boundaries)
+            _, _, S[i], _ = alignment_model.discover(image_outputs, cur_audio_outputs, image_masks, cur_audio_masks)
         else:
-            _, _, S[i], _ = alignment_model.discover(cur_audio_outputs, image_outputs, cur_phone_boundaries, region_masks)
+            _, _, S[i], _ = alignment_model.discover(cur_audio_outputs, image_outputs, cur_audio_masks, image_masks)
 
     S = torch.FloatTensor(S)
     if retriever is not None and image_embeds is not None and audio_embeds is not None:
-        S_r = retriever(image_embeds, audio_embeds)
+        S_r = retriever(image_embeds, audio_embeds, image_masks, audio_masks)
         S_A2I = S_r # XXX S * S_r.softmax(0)
         S_I2A = S_r # XXX S * S_r.softmax(1)
     else:

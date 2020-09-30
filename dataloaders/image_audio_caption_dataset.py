@@ -84,8 +84,8 @@ class ImageAudioCaptionDataset(Dataset):
             self.segmentations.append([[start, end]])
           else:
             self.segmentations[-1].append([start, end])
-          if len(self.segmentations) > 29: # XXX
-            break
+          # if len(self.segmentations) > 29: # XXX
+          #   break
 
     if bbox_file.split('.')[-1] == 'txt' and segment_file.split('.')[-1] == 'json':
         with open(segment_file, 'r') as fs:
@@ -119,12 +119,12 @@ class ImageAudioCaptionDataset(Dataset):
                   self.bboxes[-1].append([x, y, w, h])
     elif bbox_file.split('.')[-1] == 'npz': # If bbox file is npz format, assume the features are already extracted 
         self.bboxes = np.load(bbox_file) 
-        self.image_keys = sorted(self.bboxes, key=lambda x:int(x.split('_')[-1]))[:30] # XXX
+        self.image_keys = sorted(self.bboxes, key=lambda x:int(x.split('_')[-1])) # XXX
 
     self.keep_indices = None
     if keep_index_file:
         with open(keep_index_file, 'r') as f:
-            self.keep_indices = [i for i, line in enumerate(f)][:30] #if int(line)] # XXX
+            self.keep_indices = [i for i, line in enumerate(f) if int(line)] # XXX
     else:
         self.keep_indices = list(range(len(self.audio_keys)))
     print('Number of images = {}, number of captions = {}'.format(len(self.image_keys), len(self.audio_keys)))

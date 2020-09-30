@@ -119,16 +119,6 @@ def train(source_model, target_model,
             target_embed, target_output = target_model(target_input, save_features=True)
             source_embed, source_output = source_model(source_input, save_features=True)
             
-            # XXX
-            '''
-            if epoch == 0:
-                for b in range(B):
-                    arr_idx = i * args.batch_size + b
-                    if args.translate_direction == 'sp2im':
-                        audio_embeds['arr_{}'.format(arr_idx)] = target_embed[b].cpu().detach().numpy()
-                    elif args.translate_direction == 'im2sp':
-                        audio_embeds['arr_{}'.format(arr_idx)] = source_embed[b].cpu().detach().numpy()
-            '''
             # Compute source and target outputs
             source_pooling_ratio = round(source_input.size(1) / source_output.size(1))
             target_pooling_ratio = round(target_input.size(1) / target_output.size(1))
@@ -157,7 +147,7 @@ def train(source_model, target_model,
 
             align_loss = -alignment_model(source_output, target_output, source_mask, target_mask)
             if retriever is not None:
-                retrieve_loss = retriever.loss(source_embed, target_embed) 
+                retrieve_loss = retriever.loss(source_embed, target_embed, source_mask, target_mask) 
                 loss = retrieve_loss # + align_loss # XXX
             else:
                 loss = align_loss
@@ -197,12 +187,6 @@ def train(source_model, target_model,
         alignment_model.Mstep()
         alignment_model.reset()
         
-        '''
-        if epoch == 0: # XXX
-            print('Saving acoustic embeddings ...')
-            np.savez('{}/acoustic_embeddings.npz'.format(exp_dir), **audio_embeds)
-        '''
-
         if (epoch + 1) % 1 == 0:
             torch.save(target_model.state_dict(),
                 "%s/target_model.%d.pth" % (exp_dir, epoch))
