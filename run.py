@@ -8,6 +8,7 @@ import numpy as np
 import logging
 import models
 from steps.traintest import train, validate, initialize_clusters  
+from steps.gen_feats import generate_acoustic_features
 from dataloaders.image_audio_caption_dataset import ImageAudioCaptionDataset
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -33,6 +34,7 @@ parser.add_argument('--task', choices={'alignment', 'retrieval', 'both'}, defaul
 parser.add_argument('--start_step', type=int, default=0, help='Starting step of the experiment')
 parser.add_argument('--resume', action='store_true', help='Resume the experiment')
 parser.add_argument('--device', choices={'cuda:0', 'cuda:1', 'cpu'}, default='cuda:0', help='Device to use')
+parser.add_argument('--generate_features', action='store_true')
 args = parser.parse_args()
 
 if not os.path.isdir('data'):
@@ -274,6 +276,9 @@ if args.start_step <= 1:
           retriever)
 
 if args.start_step <= 2:
-  # TODO
+  if args.generate_features:
+      generate_acoustic_features(audio_model, audio_segment_model, train_loader, configs, args)
+      generate_acoustic_features(audio_model, audio_segment_model, test_loader, configs, args)
+
   # Evaluate the model
   print('to-do: evaluate word discovery performance')

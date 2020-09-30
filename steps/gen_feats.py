@@ -1,0 +1,20 @@
+import numpy as np
+
+def generate_acoustic_features(audio_model, segmenter, loader, configs, args):
+    feats = {}
+    B = configs.get('batch_size', 32)
+    for i_b, batch in enumerate(loader):
+        if configs.get('image_first', True):
+            _, inputs, _, in_boundaries = batch
+        else:
+            inputs, _, in_boundaries, _ = batch
+
+        embeds, outputs = audio_model(inputs, save_features=True)
+        embeds, masks, _ = segmenter(embeds, in_boundaries, is_embed=True)
+
+        lengths = masks.sum(-1).cpu().detach().numpy().astype(int)
+        for j in range(embeds.size(0)):
+            arr_key = 'arr_{}'.format(i_b * B + j)
+            print(arr_key)
+            feats[arr_key] = embeds[j, :lengths[j]].cpu().detach().numpy()
+    np.savez('{}/ctc_feature.npz'.format(args.exp_dir), **feats)
