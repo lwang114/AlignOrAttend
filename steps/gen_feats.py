@@ -1,8 +1,9 @@
 import numpy as np
 
-def generate_acoustic_features(audio_model, segmenter, loader, configs, args):
+def generate_acoustic_features(audio_model, segmenter, loader, configs, args, out_file):
     feats = {}
-    B = configs.get('batch_size', 32)
+    B = args.batch_size
+    print('Batch size={}, total number of batches={}'.format(B, len(loader)))
     for i_b, batch in enumerate(loader):
         if configs.get('image_first', True):
             _, inputs, _, in_boundaries = batch
@@ -17,4 +18,4 @@ def generate_acoustic_features(audio_model, segmenter, loader, configs, args):
             arr_key = 'arr_{}'.format(i_b * B + j)
             print(arr_key)
             feats[arr_key] = embeds[j, :lengths[j]].cpu().detach().numpy()
-    np.savez('{}/ctc_feature.npz'.format(args.exp_dir), **feats)
+    np.savez('{}/{}'.format(args.exp_dir, out_file), **feats)

@@ -174,7 +174,7 @@ print(model_configs)
 if args.audio_model == 'transformer':
   train_loader = torch.utils.data.DataLoader(
     ImageAudioCaptionDataset(path['audio_root_path_train_kaldi'], path['image_root_path_train'], path['segment_file_train'], path['bbox_file_train'], configs=configs),
-    batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True
+    batch_size=args.batch_size, shuffle=(not args.generate_features), num_workers=8, pin_memory=True
   ) # XXX
   test_loader = torch.utils.data.DataLoader(
     ImageAudioCaptionDataset(path['audio_root_path_test_kaldi'], path['image_root_path_test'], path['segment_file_test'], path['bbox_file_test'], configs=configs),
@@ -183,7 +183,7 @@ if args.audio_model == 'transformer':
 else:
   train_loader = torch.utils.data.DataLoader(
     ImageAudioCaptionDataset(path['audio_root_path_train'], path['image_root_path_train'], path['segment_file_train'], path['bbox_file_train'], configs=configs),
-    batch_size=args.batch_size, shuffle=True, num_workers=1, pin_memory=True
+    batch_size=args.batch_size, shuffle=(not args.generate_features), num_workers=1, pin_memory=True
   ) # XXX
   test_loader = torch.utils.data.DataLoader(  
     ImageAudioCaptionDataset(path['audio_root_path_test'], path['image_root_path_test'], path['segment_file_test'], path['bbox_file_test'], keep_index_file=path['retrieval_split_file'], configs=configs),
@@ -277,8 +277,16 @@ if args.start_step <= 1:
 
 if args.start_step <= 2:
   if args.generate_features:
-      generate_acoustic_features(audio_model, audio_segment_model, train_loader, configs, args)
-      generate_acoustic_features(audio_model, audio_segment_model, test_loader, configs, args)
+      generate_acoustic_features(audio_model, 
+                                 audio_segment_model, 
+                                 train_loader, 
+                                 configs, args, 
+                                 out_file='train_{}_features'.format(args.audio_model))
+      generate_acoustic_features(audio_model, 
+                                 audio_segment_model, 
+                                 test_loader, 
+                                 configs, args, 
+                                 out_file='test_{}_features'.format(args.audio_model))
 
   # Evaluate the model
   print('to-do: evaluate word discovery performance')
