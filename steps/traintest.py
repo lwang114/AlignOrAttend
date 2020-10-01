@@ -196,6 +196,7 @@ def train(source_model, target_model,
             with open('{}/transprob_{}.json'.format(exp_dir, epoch), 'w') as f:
                 json.dump(alignment_model.P_st.tolist(), f, indent=4, sort_keys=True)
 
+            args.task = 'retrieval' if epoch < 15 else 'both' # XXX
             recalls = validate(source_model, 
                                target_model, 
                                source_segment_model, 
@@ -302,11 +303,12 @@ def validate(source_model, target_model,
                 audio_masks.append(source_mask)
                 image_masks.append(target_mask) 
             
-            alignments, clusters, _, _ = alignment_model.discover(source_output, target_output, source_mask, target_mask)
-            for b, (alignment, cluster) in enumerate(zip(alignments, clusters)):
-              align_results.append({'index': i*B+b,
-                                    'alignment': alignment.tolist(),
-                                    'image_concepts': cluster.tolist()})
+            if args.task == 'alignment' or args.task == 'both':
+                alignments, clusters, _, _ = alignment_model.discover(source_output, target_output, source_mask, target_mask)
+                for b, (alignment, cluster) in enumerate(zip(alignments, clusters)):
+                  align_results.append({'index': i*B+b,
+                                        'alignment': alignment.tolist(),
+                                        'image_concepts': cluster.tolist()})
             batch_time.update(time.time() - end)
             end = time.time()
 
@@ -344,8 +346,9 @@ def validate(source_model, target_model,
     logger.info(' * Audio R@1 {A_r1:.3f} Image R@1 {I_r1:.3f} over {N:d} validation pairs'
           .format(A_r1=A_r1, I_r1=I_r1, N=N_examples))
 
-    with open('{}/alignment.json'.format(args.exp_dir), 'w') as f:
-      json.dump(align_results, f, indent=4, sort_keys=True)
+    if args.task == 'alignment' or args.task == 'both':
+        with open('{}/alignment.json'.format(args.exp_dir), 'w') as f:
+          json.dump(align_results, f, indent=4, sort_keys=True)
 
     return recalls
 

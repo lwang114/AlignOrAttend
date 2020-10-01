@@ -57,6 +57,8 @@ class LinearRetriever(nn.Module):
         elif self.losstype == 'triplet':
             n = x.size(0)
             loss = torch.zeros(1, device=x.device, requires_grad=True)
+            if n == 1:
+                return loss
             for i in range(n):
                 x_imp_ind = i
                 y_imp_ind = i
@@ -105,6 +107,7 @@ class DotProductRetriever(nn.Module):
         return S
 
     def matchmap_similarity(self, x, y):
+        print(x.size(), y.size())
         matchmap = torch.mm(x, y.T)
         if self.simtype == 'MISA':
             return matchmap.max(0)[0].mean() 
