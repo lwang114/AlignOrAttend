@@ -107,7 +107,6 @@ class DotProductRetriever(nn.Module):
         return S
 
     def matchmap_similarity(self, x, y):
-        print(x.size(), y.size())
         matchmap = torch.mm(x, y.T)
         if self.simtype == 'MISA':
             return matchmap.max(0)[0].mean() 
@@ -129,6 +128,9 @@ class DotProductRetriever(nn.Module):
             for i in range(n):
                 x_imp_ind = i
                 y_imp_ind = i
+                if n == 1:
+                    return loss
+
                 while x_imp_ind == i:
                     x_imp_ind = np.random.randint(0, n)
                 while y_imp_ind == i:

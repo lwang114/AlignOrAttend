@@ -10,12 +10,14 @@ import models
 from steps.traintest import train, validate, initialize_clusters  
 from steps.gen_feats import generate_acoustic_features
 from dataloaders.image_audio_caption_dataset import ImageAudioCaptionDataset
+from dataloaders.image_phone_caption_dataset import ImagePhoneCaptionDataset
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--exp_dir', '-e', type=str, help='Experimental directory')
 parser.add_argument('--dataset', choices={'mscoco2k', 'mscoco20k', 'mscoco'})
 parser.add_argument('--audio_model', choices={'lstm', 'tdnn', 'transformer'}, default='lstm')
 parser.add_argument('--image_model', choices={'res34', 'rcnn', 'linear'}, default='res34')
+parser.add_argument('--supervision_level', choices={'text', 'audio'}, default='audio')
 parser.add_argument('--segment_level', choices={'word', 'phone'}, default='word')
 parser.add_argument('--alignment_model', choices={'mixture_aligner'}, default='mixture_aligner')
 parser.add_argument('--retrieval_model', choices={None, 'linear_retriever', 'dotproduct_retriever'}, default=None)
@@ -30,11 +32,12 @@ parser.add_argument('--n_epochs', type=int, default=20, help='Number of training
 parser.add_argument('--n_print_steps', type=int, default=10, help='Print statistics every n_print_steps')
 parser.add_argument('--n_word_class', type=int, default=49, help='Number of word unit classes')
 parser.add_argument('--n_concept_class', type=int, default=80, help='Number of image concept classes')
-parser.add_argument('--task', choices={'alignment', 'retrieval', 'both'}, default='retrieval', help='Type of tasks to evaluate')
+parser.add_argument('--task', choices={'alignment', 'retrieval', 'both'}, default='both', help='Type of tasks to perform during validation')
 parser.add_argument('--start_step', type=int, default=0, help='Starting step of the experiment')
 parser.add_argument('--resume', action='store_true', help='Resume the experiment')
 parser.add_argument('--device', choices={'cuda:0', 'cuda:1', 'cpu'}, default='cuda:0', help='Device to use')
 parser.add_argument('--generate_features', action='store_true')
+parser.add_argument('--path_file', type=str, default=None, help='File storing the data paths')
 args = parser.parse_args()
 
 if not os.path.isdir('data'):
@@ -45,7 +48,7 @@ if not os.path.isdir(args.exp_dir):
 logging.basicConfig(filename='{}/train.log'.format(args.exp_dir), format='%(asctime)s %(message)s', level=logging.DEBUG)
 
 # Load the data paths
-if not os.path.isfile('data/{}_path.json'.format(args.dataset)):
+if not os.path.isfile('data/{}_path.json'.format(args.dataset)) and not args.path_file:
   with open('data/{}_path.json'.format(args.dataset), 'w') as f:
     root = '/ws/ifp-53_2/hasegawa/lwang114/data/mscoco/'
     kaldi_root = '/ws/ifp-53_1/hasegawa/tools/espnet/egs/discophone/ifp_lwang114/'
@@ -78,20 +81,31 @@ if not os.path.isfile('data/{}_path.json'.format(args.dataset)):
                 'image_root_path_test':'{}/val2014/imgs/val2014/'.format(root),
                 'bbox_file_train':image_feat_file_train,
                 'bbox_file_test':image_feat_file_test,
-                'retrieval_split_file':'{}/val2014/mscoco_val_split.txt'.format(root)}
+                'phone_caption_file_train':'{}/train2014/mscoco_train_phone_captions_segmented.txt'.format(root),
+                'phone_caption_file_test':'{}/val2014/mscoco_val_phone_captions_segmented.txt'.format(root),
+                'retrieval_split_file':'{}/val2014/mscoco_val_split.txt'.format(root),
+                'phone_to_idx_file': '{}/mscoco_phone2id.json'.format(root)}
     else:
       raise ValueError('Dataset {} not supported yet'.format(args.dataset))
     json.dump(path, f, indent=4, sort_keys=True)
 else:
-  with open('data/{}_path.json'.format(args.dataset), 'r') as f:
+  path_file = args.path_file if args.path_file else 'data/{}_path.json'.format(args.dataset)
+  with open(path_file, 'r') as f:
     path = json.load(f) 
 
 if args.dataset == 'mscoco2k' or args.dataset == 'mscoco20k':
-  if args.segment_level == 'phone':
+  if args.segment_level == 'text':
     args.n_word_class = 48
     args.n_concept_class = 65
   elif args.segment_level == 'word':
     args.n_concept_class = args.n_word_class = 65
+elif args.dataset == 'mscoco':
+    if args.supervision_level == 'text':
+        args.n_word_class = 3001
+        args.n_concept_class = 80
+    else:
+        args.n_word_class = 1001
+        args.n_concept_class = 80
 
 if os.path.isfile('{}/model_configs.json'.format(args.exp_dir)): 
   with open('{}/model_configs.json'.format(args.exp_dir), 'r') as f:
@@ -104,11 +118,24 @@ if os.path.isfile('{}/model_configs.json'.format(args.exp_dir)):
     aligner_configs = model_configs['aligner']  
     retriever_configs = model_configs.get('retriever', {})
 else:
+  if args.supervision_level == 'audio':
+    acoustic_feature_dim = 83 if args.audio_model == 'transformer' else 40
+  else:
+    acoustic_feature_dim = 49
+
+  if args.audio_model == 'tdnn':
+      acoustic_embedding_dim = 512
+  elif args.audio_model == 'lstm':
+      acoustic_embedding_dim = 100
+  elif args.audio_model == 'transformer':
+      acoustic_embedding_dim = 256
+
   configs = {'max_num_regions': 10,
              'max_num_phones': 50,
              'max_num_frames': 800,
+             'max_vocab_size': 3000,
              'segment_level': args.segment_level, 
-             'n_mfcc': 83 if args.audio_model == 'transformer' else 40}
+             'n_mfcc': acoustic_feature_dim}
   
   if args.translate_direction == 'sp2im':
     configs['image_first'] = True
@@ -130,13 +157,6 @@ else:
                            'pretrained_model': '/ws/ifp-53_2/hasegawa/lwang114/fall2020/exp/res34_pretrained_model/image_model.14.pth',
                            'codebook_file': '{}/image_codebook.npy'.format(args.exp_dir)}
 
-  if args.audio_model == 'tdnn':
-      acoustic_embedding_dim = 512
-  elif args.audio_model == 'lstm':
-      acoustic_embedding_dim = 100
-  elif args.audio_model == 'transformer':
-      acoustic_embedding_dim = 256
-
   audio_encoder_configs = {'n_class': args.n_word_class,
                            'softmax_activation': 'gaussian',
                            'precision': 0.1,
@@ -146,7 +166,8 @@ else:
                            'pretrained_model': '/ws/ifp-53_2/hasegawa/lwang114/summer2020/exp/blstm3_mscoco_train_sgd_lr_0.00001_mar25/audio_model.7.pth',
                            'codebook_file': '{}/audio_codebook.npy'.format(args.exp_dir)}
   audio_segmenter_configs = {'max_nframes': configs['max_num_frames'],
-                             'max_nsegments': configs['max_num_phones']}
+                             'max_nsegments': configs['max_num_phones'],
+                             'max_vocab_size': configs.get('max_vocab_size', 0)}
   image_segmenter_configs = {'max_nframes': configs['max_num_regions'],
                              'max_nsegments': configs['max_num_regions']}
   retriever_configs = {}
@@ -171,28 +192,59 @@ else:
 print(model_configs)
 
 # Set up the dataloaders
-if args.audio_model == 'transformer':
-  train_loader = torch.utils.data.DataLoader(
-    ImageAudioCaptionDataset(path['audio_root_path_train_kaldi'], path['image_root_path_train'], path['segment_file_train'], path['bbox_file_train'], configs=configs),
-    batch_size=args.batch_size, shuffle=(not args.generate_features), num_workers=8, pin_memory=True
-  ) # XXX
-  test_loader = torch.utils.data.DataLoader(
-    ImageAudioCaptionDataset(path['audio_root_path_test_kaldi'], path['image_root_path_test'], path['segment_file_test'], path['bbox_file_test'], configs=configs),
-    batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True
-  )
-else:
-  train_loader = torch.utils.data.DataLoader(
-    ImageAudioCaptionDataset(path['audio_root_path_train'], path['image_root_path_train'], path['segment_file_train'], path['bbox_file_train'], configs=configs),
-    batch_size=args.batch_size, shuffle=(not args.generate_features), num_workers=1, pin_memory=True
-  ) # XXX
-  test_loader = torch.utils.data.DataLoader(  
-    ImageAudioCaptionDataset(path['audio_root_path_test'], path['image_root_path_test'], path['segment_file_test'], path['bbox_file_test'], keep_index_file=path['retrieval_split_file'], configs=configs),
-    batch_size=args.batch_size, shuffle=False, num_workers=1, pin_memory=True
-  )
+if args.supervision_level == 'audio':
+  if args.audio_model == 'transformer': 
+    train_set = ImageAudioCaptionDataset(path['audio_root_path_train_kaldi'], 
+                                         path['image_root_path_train'], 
+                                         path['segment_file_train'], 
+                                         path['bbox_file_train'], 
+                                         configs=configs)
+    test_set = ImageAudioCaptionDataset(path['audio_root_path_test_kaldi'], 
+                                        path['image_root_path_test'], 
+                                        path['segment_file_test'], 
+                                        path['bbox_file_test'], 
+                                        keep_index_file=path['retrieval_split_file'], 
+                                        configs=configs)
+  else:
+    train_set = ImageAudioCaptionDataset(path['audio_root_path_train'], 
+                                         path['image_root_path_train'], 
+                                         path['segment_file_train'], 
+                                         path['bbox_file_train'],
+                                         configs=configs)
+    test_set = ImageAudioCaptionDataset(path['audio_root_path_test'], 
+                                        path['image_root_path_test'], 
+                                        path['segment_file_test'], 
+                                        path['bbox_file_test'], 
+                                        keep_index_file=path['retrieval_split_file'], 
+                                        configs=configs)
+elif args.supervision_level == 'text':
+  train_set = ImagePhoneCaptionDataset(path['phone_caption_file_train'],
+                                       path['bbox_file_train'],
+                                       path['phone_to_idx_file'],
+                                       feat_conf=configs)
+  test_set = ImagePhoneCaptionDataset(path['phone_caption_file_test'],
+                                      path['bbox_file_test'],
+                                      path['phone_to_idx_file'],
+                                      path['retrieval_split_file'],
+                                      feat_conf=configs)
 
-# Initialize the image and audio encoders
+train_loader = torch.utils.data.DataLoader(train_set,
+                                           batch_size=args.batch_size, 
+                                           shuffle=(not args.generate_features), 
+                                           num_workers=1, 
+                                           pin_memory=True) # XXX
+test_loader = torch.utils.data.DataLoader(test_set,
+                                          batch_size=args.batch_size, 
+                                          shuffle=False, 
+                                          num_workers=1, 
+                                          pin_memory=True)
+
+# Initialize the image and audio models
 if args.audio_model == 'tdnn':
-  audio_model = models.DavenetEncoder(audio_encoder_configs)
+  if args.supervision_level == 'text':
+    audio_model = models.SmallDavenetEncoder(audio_encoder_configs)
+  else: # TODO
+    audio_model = models.DavenetEncoder(audio_encoder_configs)
 elif args.audio_model == 'lstm':
   audio_model = models.BLSTMEncoder(audio_encoder_configs)
 elif args.audio_model == 'transformer': # TODO
@@ -205,7 +257,11 @@ if args.image_model == 'res34':
 elif args.image_model == 'linear' or args.image_model == 'rcnn':
   image_model = models.LinearEncoder(image_encoder_configs)
 
-audio_segment_model = models.NoopSegmenter(audio_segmenter_configs)
+if args.supervision_level == 'audio':
+  audio_segment_model = models.NoopSegmenter(audio_segmenter_configs)
+else:
+  audio_segment_model = models.FixedTextSegmenter(audio_segmenter_configs)
+
 image_segment_model = models.NoopSegmenter(image_segmenter_configs)
                                     
 if args.alignment_model == 'mixture_aligner':
@@ -231,13 +287,14 @@ if args.start_step <= 0:
     audio_model.codebook = nn.Parameter(torch.FloatTensor(codebook), 
                                         requires_grad = False) # XXX
   else:
-    audio_model.codebook = initialize_clusters(audio_model,
-                                               audio_segment_model,
-                                               alignment_model,
-                                               train_loader,
-                                               model_type='trg' if args.translate_direction=='sp2im' else 'src',
-                                               configs=audio_encoder_configs)
-  print('Finish initializing acoustic codebook after {:5f} s'.format(time.time() - begin_time))
+    if args.supervision_level == 'audio':
+        audio_model.codebook = initialize_clusters(audio_model,
+                                                   audio_segment_model,
+                                                   alignment_model,
+                                                   train_loader,
+                                                   model_type='trg' if args.translate_direction=='sp2im' else 'src',
+                                                   configs=audio_encoder_configs)
+        print('Finish initializing acoustic codebook after {:5f} s'.format(time.time() - begin_time))
 
   if os.path.isfile(image_encoder_configs['codebook_file']):
     codebook = np.load(image_encoder_configs['codebook_file']) 

@@ -118,7 +118,7 @@ def train(source_model, target_model,
 
             target_embed, target_output = target_model(target_input, save_features=True)
             source_embed, source_output = source_model(source_input, save_features=True)
-            
+
             # Compute source and target outputs
             source_pooling_ratio = round(source_input.size(1) / source_output.size(1))
             target_pooling_ratio = round(target_input.size(1) / target_output.size(1))
@@ -263,9 +263,6 @@ def validate(source_model, target_model,
             source_embed, source_output = source_model(source_input, save_features=True)
             target_embed, target_output = target_model(target_input, save_features=True)
 
-            source_output = source_output.cpu().detach()
-            target_output = target_output.cpu().detach()
-
             source_pooling_ratio = round(source_input.size(1) / source_output.size(1))
             target_pooling_ratio = round(target_input.size(1) / target_output.size(1))
             # Downsample the segmentations according to the pooling ratio
@@ -287,6 +284,11 @@ def validate(source_model, target_model,
             target_output, target_mask, _ = target_segment_model(target_output, target_segmentation)
             source_embed, _, _ = source_segment_model(source_embed, source_segmentation, is_embed=True)
             target_embed, _, _ = target_segment_model(target_embed, target_segmentation, is_embed=True)
+            
+            source_output = source_output.cpu().detach()
+            target_output = target_output.cpu().detach()
+            source_embed = source_embed.cpu().detach()
+            target_embed = target_embed.cpu().detach()
 
             if args.translate_direction == 'sp2im':
                 I_outputs.append(source_output)

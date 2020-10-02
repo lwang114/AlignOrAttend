@@ -57,15 +57,15 @@ class FixedTextSegmenter(nn.Module):
       in_boundary = torch.ones((B, L+1), device=x.device)
 
     segment_times = np.nonzero(in_boundary.cpu().detach().numpy())[0]
-    mask = torch.zeros((B, self.max_nsegments))
+    mask = torch.zeros((B, self.max_nsegments), device=x.device)
     output = []
 
     for b in range(B):
-      sent = torch.zeros((self.max_nsegments, self.max_vocab_size))
-      for t, (start, end) in enumerate(zip(segment_times[0], segment_times[-1])):
+      sent = torch.zeros((self.max_nsegments, self.max_vocab_size), device=x.device)
+      for t, (start, end) in enumerate(zip(segment_times[:-1], segment_times[1:])):
         if t >= self.max_nsegments:
           break
-        mask[b, t, start:end] = 1.
+        mask[b, t] = 1.
         phns = np.argmax(x[b, start:end].cpu().detach().numpy(), axis=-1)
         word = ' '.join(str(phn) for phn in phns)
         if not word in self.word2idx and len(self.word2idx) < self.max_vocab_size:
@@ -74,4 +74,8 @@ class FixedTextSegmenter(nn.Module):
         else:
           sent[t, 0] = 1.
       output.append(sent)
-    return torch.stack(output), mask, in_boundary
+    
+    if is_embed:
+        return x, mask, in_boundary
+    else:
+        return torch.stack(output), mask, in_boundary

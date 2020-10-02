@@ -21,11 +21,12 @@ def calc_recalls(image_outputs,
     for i in range(n):
         cur_audio_outputs = torch.cat([audio_outputs[i].unsqueeze(0) for j in range(n)])
         cur_audio_masks = torch.cat([audio_masks[i].unsqueeze(0) for j in range(n)])
-        if args.translate_direction == 'sp2im':
-            _, _, S[i], _ = alignment_model.discover(image_outputs, cur_audio_outputs, image_masks, cur_audio_masks)
-        else:
-            _, _, S[i], _ = alignment_model.discover(cur_audio_outputs, image_outputs, cur_audio_masks, image_masks)
-
+        if args.task == 'alignment' or args.task == 'both':
+            if args.translate_direction == 'sp2im':
+                _, _, S[i], _ = alignment_model.discover(image_outputs, cur_audio_outputs, image_masks, cur_audio_masks)
+            else:
+                _, _, S[i], _ = alignment_model.discover(cur_audio_outputs, image_outputs, cur_audio_masks, image_masks)
+        
     S = torch.FloatTensor(S)
     if retriever is not None and image_embeds is not None and audio_embeds is not None:
         S_r = retriever(image_embeds, audio_embeds, image_masks, audio_masks)
@@ -33,7 +34,8 @@ def calc_recalls(image_outputs,
         S_I2A = S_r # XXX S * S_r.softmax(1)
     else:
         S_A2I = S_I2A = S
-    
+    np.save('{}/similarity_matrix.npy'.format(args.exp_dir), S_A2I.cpu().detach().numpy())
+
     A2I_scores, A2I_ind = S_A2I.topk(10, 0)
     I2A_scores, I2A_ind = S_I2A.topk(10, 1)
     A_r1 = AverageMeter()
