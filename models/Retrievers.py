@@ -76,6 +76,16 @@ class LinearRetriever(nn.Module):
         else:
             raise NotImplementedError
         return loss
+    
+    def freeze(self):
+      for child in self.children():
+        for p in child:
+          p.requires_grad = False 
+
+    def unfreeze(self):
+      for child in self.children():
+        for p in child:
+          p.requires_grad = True 
 
 
 class DotProductRetriever(nn.Module):
@@ -145,3 +155,9 @@ class DotProductRetriever(nn.Module):
         else:
             raise NotImplementedError
         return loss
+
+    def freeze(self):
+      pass
+
+    def unfreeze(self):
+      pass

@@ -51,6 +51,13 @@ class Transformer(nn.Module):
       return embed, output
     else:
       return output
+  
+  def freeze(self): # TODO
+    pass
+
+  def unfreeze(self): # TODO
+    pass
+
 
 class BLSTMEncoder(nn.Module):
   def __init__(self, configs):
@@ -83,6 +90,30 @@ class BLSTMEncoder(nn.Module):
       return embed, out
     else:
       return out
+
+  def freeze(self, layer_name):
+    if layer_name == 'embed':
+      for child in self.lstm.children():
+        for p in child.parameters():
+          p.requires_grad = False
+    elif layer_name == 'codebook':
+      for child in self.clf.children():
+        for p in child.parameters():
+          p.requires_grad = False
+    else:
+      raise ValueError('Unknown layer name {}'.format(layer_name))
+
+  def unfreeze(self, layer_name):
+    if layer_name == 'embed':
+      for child in self.lstm.children():
+        for p in child.parameters():
+          p.requires_grad = True
+    elif layer_name == 'codebook':
+      for child in self.clf.children():
+        for p in child.parameters():
+          p.requires_grad = True
+    else:
+      raise ValueError('Unknown layer name {}'.format(layer_name))
     
 class DavenetEncoder(nn.Module):
     def __init__(self, configs):
@@ -121,6 +152,31 @@ class DavenetEncoder(nn.Module):
             return x, out
         else:
             return out
+    
+    def freeze(self, layer_name):
+      if layer_name == 'embed':
+        for p in self.conv1.parameters():
+          p.requires_grad = False
+        for p in self.conv2.parameters():
+          p.requires_grad = False
+        for p in self.conv3.parameters():
+          p.requires_grad = False
+      elif layer_name == 'codebook':
+        for p in self.clf.parameters():
+          p.requires_grad = False
+
+    def unfreeze(self, layer_name):
+      if layer_name == 'embed':
+        for p in self.conv1.parameters():
+          p.requires_grad = True
+        for p in self.conv2.parameters():
+          p.requires_grad = True
+        for p in self.conv3.parameters():
+          p.requires_grad = True
+      elif layer_name == 'codebook':
+        for p in self.clf.parameters():
+          p.requires_grad = True
+
 
 class BLSTM2(nn.Module):
   def __init__(self, n_class, embedding_dim=100, n_layers=1, batch_first=True):
@@ -182,16 +238,6 @@ class BLSTM3(nn.Module):
 
     if layer1_pretrain_file:
       self.rnn1.load_state_dict(torch.load(layer1_pretrain_file))      
-
-    for child in self.rnn1.children():
-      for p in child.parameters():
-        p.requires_grad = True # XXX
-
-    for p in self.rnn2.parameters():
-      p.requires_grad = True # XXX
-    
-    for p in self.fc.parameters():
-      p.requires_grad = False # XXX
 
   def forward(self, x,
               save_features=False):

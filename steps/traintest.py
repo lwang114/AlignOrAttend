@@ -44,13 +44,13 @@ def train(source_model, target_model,
         print("  best_epoch = %s" % best_epoch)
         print("  best_acc = %.4f" % best_acc)
 
-    if not isinstance(target_model, torch.nn.DataParallel) and args.device == 'gpu':
+    if not isinstance(target_model, torch.nn.DataParallel) and args.device.split(':') == 'cuda':
          target_model = nn.DataParallel(target_model, device_ids=[device])
       
-    if not isinstance(source_model, torch.nn.DataParallel) and args.device == 'gpu':
+    if not isinstance(source_model, torch.nn.DataParallel) and args.device.split(':') == 'cuda':
         source_model = nn.DataParallel(source_model, device_ids=[device])
 
-    if not isinstance(alignment_model, torch.nn.DataParallel) and args.device == 'gpu':
+    if not isinstance(alignment_model, torch.nn.DataParallel) and args.device.split(':') == 'cuda':
         alignment_model = nn.DataParallel(alignment_model, device_ids=[device])
     
     if epoch != 0:
@@ -103,17 +103,21 @@ def train(source_model, target_model,
         target_model.train()
         source_model.train()
 
-        # XXX
-        audio_embeds = {}
+        print('Phase 1: update encoder parameters with fixed codebooks ...')
+        target_model.freeze('codebook') # TODO
+        source_model.freeze('codebook')
+        target_model.unfreeze('embed')
+        source_model.unfreeze('embed')
         for i, (source_input, target_input, source_segmentation, target_segmentation) in enumerate(train_loader):
             # measure data loading time
             data_time.update(time.time() - end_time)
             B = target_input.size(0)
             target_input = target_input.to(device)
             source_input = source_input.to(device)
-            # print(source_input.size(), target_input.size())
+            
             target_segmentation = target_segmentation.to(device)
             source_segmentation = source_segmentation.to(device)
+
             optimizer.zero_grad()
 
             target_embed, target_output = target_model(target_input, save_features=True)
@@ -151,8 +155,6 @@ def train(source_model, target_model,
                 loss = retrieve_loss # + align_loss # XXX
             else:
                 loss = align_loss
-
-            alignment_model.Estep(source_output, target_output, source_mask, target_mask)
                      
             loss.backward()
             optimizer.step()
@@ -184,6 +186,86 @@ def train(source_model, target_model,
             end_time = time.time()
             global_step += 1
         
+        print('Phase 2: update codebooks with fixed encoder ...')
+        target_model.freeze('embed')
+        source_model.freeze('embed')
+        target_model.unfreeze('codebook')
+        source_model.unfreeze('codebook')
+        
+        target_grads = torch.zeros(target_model.codebook.size()) 
+        source_grads = torch.zeros(source_model.codebook.size())
+        for i, (source_input, target_input, source_segmentation, target_segmentation) in enumerate(train_loader):
+            # measure data loading time
+            data_time.update(time.time() - end_time)
+            B = target_input.size(0)
+            target_input = target_input.to(device)
+            source_input = source_input.to(device)
+            
+            target_segmentation = target_segmentation.to(device)
+            source_segmentation = source_segmentation.to(device)
+
+            optimizer.zero_grad()
+
+            target_embed, target_output = target_model(target_input, save_features=True)
+            source_embed, source_output = source_model(source_input, save_features=True)
+
+            # Compute source and target outputs
+            source_pooling_ratio = round(source_input.size(1) / source_output.size(1))
+            target_pooling_ratio = round(target_input.size(1) / target_output.size(1))
+
+            # Downsample the source segmentation by pooling ratio
+            if source_pooling_ratio > 1: 
+              source_segmentation_down = np.zeros((B, source_segmentation.size(-1) // source_pooling_ratio))
+              for b in range(B):
+                segments = np.nonzero(source_segmentation[b].cpu().numpy())[0] // source_pooling_ratio
+                source_segmentation_down[b, segments] = 1
+              source_segmentation = torch.FloatTensor(source_segmentation_down).to(device=device)
+
+            # Downsample the target segmentation by pooling ratio
+            if target_pooling_ratio > 1:
+              target_segmentation_down = np.zeros((B, target_segmentation.size(-1) // target_pooling_ratio))
+              for b in range(B):
+                segments = np.nonzero(target_segmentation[b].cpu().numpy())[0] // target_pooling_ratio
+                target_segmentation_down[b, segments] = 1 
+              target_segmentation = torch.FloatTensor(target_segmentation_down).to(device=device) 
+
+            # Convert the segmentations to masks
+            source_output, source_mask, _ = source_segment_model(source_output, source_segmentation)
+            source_embed, _, _ = source_segment_model(source_embed, source_segmentation, is_embed=True) # XXX
+            target_output, target_mask, _ = target_segment_model(target_output, target_segmentation)
+            target_embed, _, _ = target_segment_model(target_embed, target_segmentation, is_embed=True) # XXX
+
+            alignment_model.Estep(source_output, target_output, source_mask, target_mask) 
+            align_loss = -alignment_model(source_output, target_output, source_mask, target_mask)
+            loss = align_loss
+
+            loss.backward()
+            optimizer.step()
+
+            # record loss
+            align_loss_meter.update(align_loss.item(), B)
+            loss_meter.update(loss.item(), B)
+            batch_time.update(time.time() - end_time)
+
+            if global_step % args.n_print_steps == 0 and global_step != 0:
+                print('Epoch: [{0}][{1}/{2}]\t'
+                      'Time {batch_time.val:.3f}s ({batch_time.avg:.3f}s)\t'
+                      'Data {data_time.val:.3f}s ({data_time.avg:.3f}s)\t'
+                      'Align loss {align_loss_meter.val:.4f} ({align_loss_meter.avg:.4f})\t'
+                      'Loss total {loss_meter.val:.4f} ({loss_meter.avg:.4f})'.format(
+                   epoch, i, len(train_loader), batch_time=batch_time,
+                   data_time=data_time, align_loss_meter=align_loss_meter, loss_meter=loss_meter))
+                logger.info('Epoch: [{0}][{1}/{2}]\t'
+                            'Time {batch_time.val:.3f}s ({batch_time.avg:.3f}s)\t'
+                            'Data {data_time.val:.3f}s ({data_time.avg:.3f}s)\t' 
+                            'Align loss {align_loss_meter.val:.4f} ({align_loss_meter.avg:.4f})\t'
+                            'Loss total {loss_meter.val:.4f} ({loss_meter.avg:.4f})'.format(
+                   epoch, i, len(train_loader), batch_time=batch_time,
+                   data_time=data_time, align_loss_meter=align_loss_meter, loss_meter=loss_meter))
+                if np.isnan(loss_meter.avg):
+                    print("training diverged...")
+                    return
+         
         alignment_model.Mstep()
         alignment_model.reset()
         
