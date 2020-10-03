@@ -37,6 +37,19 @@ class attention(nn.Module):
         # return the resulting embedding
         return x 
 
+class DotProductAttention(nn.Module):
+  def __init__(self, in_size, hidden_size):
+    super(DotProductAttention, self).__init__()
+    self.hidden_size = hidden_size
+    self.hidden = nn.Linear(in_size, hidden_size)
+    nn.init.orthogonal(self.hidden.weight.data)
+  
+  def forward(self, src_sent, trg_sent):
+    src_sent = self.hidden(src_sent)
+    self.alpha = torch.bmm(src_sent, trg_sent.transpose(1, 2)) / torch.sqrt(self.hidden_size)
+    self.alpha = self.alpha.softmax(-1)
+    x = torch.bmm(self.alpha, trg_sent)
+    return x
 
 class Davenet(nn.Module):
     def __init__(self, embedding_dim=1024):
@@ -123,9 +136,7 @@ class CNN_RNN_ENCODER(nn.Module):
         self.rnn = nn.GRU(128, embedding_dim, n_layer, batch_first=True, dropout=0.5,
                         bidirectional=True)
         self.att = multi_attention(in_size = embedding_dim, hidden_size = 128, n_heads = 1)
-    
-    
-    
+        
     def forward(self, input, l):
             # input = input.transpose(2,1)
             x = self.Conv(input)
