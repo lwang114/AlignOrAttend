@@ -6,6 +6,7 @@ import torch.nn as nn
 from torch.autograd import Variable
 import pdb
 import os
+import json
 
 def calc_recalls(image_outputs, audio_outputs, args, nframes, simtype='MISA', nregions=None):
     """
@@ -21,12 +22,12 @@ def calc_recalls(image_outputs, audio_outputs, args, nframes, simtype='MISA', nr
         S = S.squeeze()
         if args.alignment_scores:
             S_a = torch.FloatTensor(np.load(args.alignment_scores))
-            S = (S.softmax(0) + S_softmax(1)) / 2 * S_a
+            S = (S.softmax(0) + S.softmax(1)) / 2 * S_a
     else:
         S = compute_matchmap_similarity_matrix(image_outputs, audio_outputs, nframes, nregions=nregions, simtype=simtype)
         if args.alignment_scores:
             S_a = torch.FloatTensor(np.load(args.alignment_scores))
-            S = (S.softmax(0) + S_softmax(1)) / 2 * S_a
+            S = (S.softmax(0) + S.softmax(1)) / 2 * S_a # XXX
             
     n = S.size(0)
     # pdb.set_trace()
@@ -95,6 +96,32 @@ def computeMatchmap(I, A):
     matchmap = matchmap.view(H, W, T)  
     return matchmap
 
+def computeAttentiveSim(I, A):
+    assert(I.dim() == 3)
+    assert(A.dim() == 2)
+    D = I.size(0)
+    H = I.size(1)
+    W = I.size(2)
+    T = A.size(1)
+    Ir = I.view(D, -1).t()
+    matchmap = torch.mm(Ir, A)
+    matchmap = (matchmap / np.sqrt(D)).softmax(-1) * matchmap  
+    return matchmap.sum(-1).mean()
+
+def computeBiAttentiveSim(I, A):
+    assert(I.dim() == 3)
+    assert(A.dim() == 2)
+    D = I.size(0)
+    H = I.size(1)
+    W = I.size(2)
+    T = A.size(1)
+    Ir = I.view(D, -1).t()
+    matchmap = torch.mm(Ir, A)
+    matchmap_A2I = (matchmap / np.sqrt(D)).softmax(-1) * matchmap  
+    matchmap_I2A = (matchmap / np.sqrt(D)).softmax(0) * matchmap
+    return (matchmap_A2I.sum(-1).mean() + matchmap_I2A.sum(0).mean()) / 2.
+    
+    
 def matchmapSim(M, simtype):
     assert(M.dim() == 3)
     if simtype == 'SISA':
@@ -159,12 +186,27 @@ def mask_margin_softmax_loss(image_outputs, audio_outputs, nframes, margin=0.001
     """
     # loss = torch.zeros(1, device=image_outputs.device, requires_grad=True)
     S = compute_matchmap_similarity_matrix(image_outputs, audio_outputs, nframes, simtype=simtype, nregions=nregions)
-    m = nn.LogSoftmax() 
+    m = nn.LogSoftmax(dim=1) 
     n = image_outputs.size(0)
     loss = -torch.sum(m(S).diag())-torch.sum(m(S.transpose(0, 1)).diag())
     loss = loss / n
     return loss
 
+def attentive_mask_margin_softmax_loss(image_outputs, audio_outputs, attention_model, nframes, margin=0.001, simtype='unidirection', nregions=None):
+    """
+    image_outputs: B x D x R tensor
+    audio_outputs: B x D x T  tensor
+    Computes the masked margin softmax loss for each anchor image/caption pair as in:
+    G. Ilharco, Y. Zhang, J. Baldridge. ``Large-scale representation learning from visually grounded untranscribed speech``. CoNLL, 2019.
+    """
+    # loss = torch.zeros(1, device=image_outputs.device, requires_grad=True)
+    # S = compute_matchmap_similarity_matrix(image_outputs, audio_outputs, attention_model, nframes, simtype=simtype, nregions=nregions)
+    m = nn.LogSoftmax(dim=1) 
+    n = image_outputs.size(0)
+    S = compute_attentive_matchmap_similarity_matrix(image_outputs, audio_outputs, nframes, simtype=simtype, nregions=nregions)
+    loss = -torch.sum(m(S).diag())-torch.sum(m(S.transpose(0, 1)).diag())
+    loss = loss / n
+    return loss
 
 def DAMSM_loss(image_outputs, audio_outputs, nframes, margin=0.001, simtype='MISA', nregions=None):
     """
@@ -197,8 +239,35 @@ def compute_matchmap_similarity_matrix(image_outputs, audio_outputs, nframes, si
                   S[image_idx, audio_idx] = matchmapSim(computeMatchmap(image_outputs[image_idx][:, 0:nR], audio_outputs[audio_idx][:, 0:nF]), simtype)
                 else:
                   S[image_idx, audio_idx] = matchmapSim(computeMatchmap(image_outputs[image_idx][:, 0:nR], audio_outputs[audio_idx][:, 0:nF]), simtype)
- 
+                '''
+                if image_idx == 0 and audio_idx == 0:
+                    Mmap = computeMatchmap(image_outputs[image_idx][:, 0:nR], audio_outputs[audio_idx][:, 0:nF]).mean(-1).cpu().detach().numpy()
+                    print('Mmap.shape: {}'.format(Mmap.shape))
+                    with open('matchmap.json', 'w') as f:
+                        json.dump(Mmap.tolist(), f)
+                '''
     return S
+
+def compute_attentive_matchmap_similarity_matrix(image_outputs, audio_outputs, nframes, simtype='unidirectional', nregions=None):
+    """
+    Assumes image_outputs is a (batchsize, embedding_dim, rows, height) tensor
+    Assumes audio_outputs is a (batchsize, embedding_dim, 1, time) tensor
+    Returns similarity matrix S where images are rows and audios are along the columns
+    """
+    assert(image_outputs.dim() == 4)
+    assert(audio_outputs.dim() == 3)
+    n = image_outputs.size(0)
+    S = torch.zeros(n, n, device=image_outputs.device)
+    for image_idx in range(n):
+            for audio_idx in range(n):
+                nF = max(1, nframes[audio_idx])
+                if len(nregions):
+                  nR = max(1, nregions[image_idx])
+                  S[image_idx, audio_idx] = computeAttentiveSim(image_outputs[image_idx][:, 0:nR], audio_outputs[audio_idx][:, 0:nF])
+                else:
+                  S[image_idx, audio_idx] = computeAttentiveSim(image_outputs[image_idx][:, 0:nR], audio_outputs[audio_idx][:, 0:nF])
+    return S
+
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""

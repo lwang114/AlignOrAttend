@@ -2,7 +2,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import numpy as np
         
 # class for making multi headed attenders.
 class multi_attention(nn.Module):
@@ -38,17 +38,27 @@ class attention(nn.Module):
         return x 
 
 class DotProductAttention(nn.Module):
-  def __init__(self, in_size, hidden_size):
+  def __init__(self, in_size):
     super(DotProductAttention, self).__init__()
-    self.hidden_size = hidden_size
-    self.hidden = nn.Linear(in_size, hidden_size)
-    nn.init.orthogonal(self.hidden.weight.data)
+    self.in_size = in_size
   
   def forward(self, src_sent, trg_sent):
-    src_sent = self.hidden(src_sent)
-    self.alpha = torch.bmm(src_sent, trg_sent.transpose(1, 2)) / torch.sqrt(self.hidden_size)
+    if src_sent.dim() == 2 and trg_sent.dim() == 2:
+        src_sent = src_sent.unsqueeze(0)
+        trg_sent = trg_sent.unsqueeze(0)
+        
+    if src_sent.size(-1) != self.in_size:
+        src_sent = src_sent.transpose(1, 2)
+    d = trg_sent.size(-1)
+    if d != self.in_size:
+        trg_sent = trg_sent.transpose(1, 2)
+
+    self.alpha = torch.zeros((1, src_sent.size(1), trg_sent.size(1)), device=src_sent.device) # torch.bmm(src_sent, trg_sent.transpose(1, 2)) / np.sqrt(self.in_size) # XXX
     self.alpha = self.alpha.softmax(-1)
     x = torch.bmm(self.alpha, trg_sent)
+    print('x.size(): {}'.format(x.size())) # XXX
+    if d != self.in_size:
+        x = x.transpose(1, 2)
     return x
 
 class Davenet(nn.Module):

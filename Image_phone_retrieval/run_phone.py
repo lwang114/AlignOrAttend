@@ -52,7 +52,7 @@ parser.add_argument('--losstype', choices=['triplet', 'mml','DAMSM','tripop'], d
 parser.add_argument('--feature',choices=['tensor','vector'], default='tensor')
 parser.add_argument('--image_concept_file', type=str, default=None, help='Text file of image concepts in each image-caption pair')
 parser.add_argument('--nfolds', type=int, default=1, help='Number of folds for cross validation')
-parser.add_argument('--worker',type=int, default=8)
+parser.add_argument('--worker',type=int, default=0)
 parser.add_argument('--only_eval',type=bool, default=False)
 parser.add_argument('--alignment_scores', type=str, default=None)
 args = parser.parse_args()

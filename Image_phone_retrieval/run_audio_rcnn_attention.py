@@ -7,7 +7,8 @@ import time
 import torch
 import dataloaders
 import models
-from steps.traintest_attention import train, validate, align, train_vector, evaluation,evaluation_vector
+from steps.traintest_attention import train_attention, validate_attention, evaluation_attention
+from steps.traintest_phone import train, validate, align, train_vector, evaluation,evaluation_vector
 import numpy as np
 import json
 import random
@@ -47,28 +48,58 @@ parser.add_argument("--image-model", type=str, default="VGG16",
 parser.add_argument("--pretrained-image-model", action="store_true",
     dest="pretrained_image_model", help="Use an image network pretrained on ImageNet")
 parser.add_argument("--margin", type=float, default=1.0, help="Margin paramater for triplet loss")
-parser.add_argument("--simtype", type=str, default="MISA",
+parser.add_argument("--simtype", type=str, default="SISA",
         help="matchmap similarity function", choices=["SISA", "MISA", "SIMA"])
 parser.add_argument('--losstype', choices=['triplet', 'mml','DAMSM','tripop'], default='triplet')
 parser.add_argument('--feature',choices=['tensor','vector'], default='tensor')
 parser.add_argument('--image_concept_file', type=str, default=None, help='Text file of image concepts in each image-caption pair')
 parser.add_argument('--nfolds', type=int, default=1, help='Number of folds for cross validation')
-parser.add_argument('--worker',type=int, default=8)
+parser.add_argument('--worker',type=int, default=0)
 parser.add_argument('--only_eval',type=bool, default=False)
 parser.add_argument('--alignment_scores', type=str, default=None)
+parser.add_argument('--precompute_acoustic_feature', action='store_true')
 args = parser.parse_args()
 
 if args.dataset == 'mscoco':
-  train_loader = torch.utils.data.DataLoader(
-    dataloaders.ImageAudioCaptionDataset(args.data_dir,'train',
-                                       max_nregions=10,
-                                       image_feat_type='rcnn'),
-    batch_size=args.batch_size,drop_last=True ,shuffle=True, num_workers=args.worker, pin_memory=True)
-  val_loader = torch.utils.data.DataLoader(
-    dataloaders.ImageAudioCaptionDataset(args.data_dir, 'val',
-                                       max_nregions=10,
-                                       image_feat_type='rcnn'),
-    batch_size=args.batch_size, shuffle=False, num_workers=args.worker, pin_memory=True)
+  if args.precompute_acoustic_feature:
+    train_loader = torch.utils.data.DataLoader(
+      dataloaders.ImageAudioCaptionDataset(args.data_dir,'train',
+                                           max_nregions=10,
+                                           image_feat_type='rcnn'),
+      batch_size=args.batch_size,drop_last=True ,shuffle=True, num_workers=args.worker, pin_memory=True)
+    val_loader = torch.utils.data.DataLoader(
+      dataloaders.ImageAudioCaptionDataset(args.data_dir, 'val',
+                                           max_nregions=10,
+                                           image_feat_type='rcnn'),
+      batch_size=args.batch_size, shuffle=False, num_workers=args.worker, pin_memory=True)
+  else:
+    audio_root_path_train = os.path.join(args.data_dir, 'train2014/wav/')
+    image_root_path_train = os.path.join(args.data_dir, 'train2014/imgs/')
+    segment_file_train = os.path.join(args.data_dir, 'train2014/mscoco_train_word_segments.txt')
+    bbox_file_train = os.path.join(args.data_dir, 'train2014/mscoco_train_rcnn_feature.npz')
+    audio_root_path_test = os.path.join(args.data_dir, 'val2014/wav/') 
+    image_root_path_test = os.path.join(args.data_dir, 'val2014/imgs/')
+    segment_file_test = os.path.join(args.data_dir, 'val2014/mscoco_val_word_segments.txt')
+    bbox_file_test = os.path.join(args.data_dir, 'val2014/mscoco_val_rcnn_feature.npz')
+
+    split_file = os.path.join(args.data_dir, 'val2014/mscoco_val_split.txt')
+    train_loader = torch.utils.data.DataLoader(
+      dataloaders.OnlineImageAudioCaptionDataset(audio_root_path_train,
+                                           image_root_path_train,
+                                           segment_file_train,
+                                           bbox_file_train,
+                                           configs={}),
+      batch_size=args.batch_size, shuffle=False, num_workers=args.worker, pin_memory=True)
+    
+    val_loader = torch.utils.data.DataLoader(
+      dataloaders.OnlineImageAudioCaptionDataset(audio_root_path_test,
+                                           image_root_path_test,
+                                           segment_file_test,
+                                           bbox_file_test,
+                                           keep_index_file=split_file,
+                                           configs={}),
+      batch_size=args.batch_size, shuffle=False, num_workers=args.worker, pin_memory=True)
+     
 else:
   args.data_dir = "/ws/ifp-53_2/hasegawa/lwang114/data/flickr30k/"
   train_loader = torch.utils.data.DataLoader(
@@ -87,11 +118,20 @@ args.exp_dir = os.path.join(args.exp_dir,args.feature,args.losstype)
 if not os.path.exists(args.exp_dir):
   os.makedirs("%s/models" % args.exp_dir)
 
-
-audio_model = models.NoOpEncoder(embedding_dim=1000)
-image_model = models.LinearTrans(input_dim=2048, embedding_dim=1000)
-attention_model = models.DotProductAttention(in_size=2048, hidden_size=1000)
-if not args.only_eval:
-  train(audio_model, image_model, attention_model, train_loader, val_loader, args)
+if args.precompute_acoustic_feature:
+  audio_model = models.NoOpEncoder(embedding_dim=1000)
+  image_model = models.LinearTrans(input_dim=2048, embedding_dim=1000)
+  attention_model = models.DotProductAttention(in_size=1000)
+  if not args.only_eval:
+    train_attention(audio_model, image_model, attention_model, train_loader, val_loader, args)
+  else:
+    evaluation_attention(audio_model, image_model, attention_model, val_loader, args)
 else:
-  evaluation(audio_model, image_model, val_loader, args)
+  audio_model = models.Davenet(embedding_dim=1024)
+  image_model = models.LinearTrans(input_dim=2048, embedding_dim=1024)
+  attention_model = models.DotProductAttention(in_size=1024)
+  if not args.only_eval:
+    train_attention(audio_model, image_model, attention_model, train_loader, val_loader, args)
+  else:
+    evaluation_attention(audio_model, image_model, attention_model, train_loader, val_loader, args)
+
