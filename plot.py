@@ -21,15 +21,23 @@ from Image_phone_retrieval.steps.util import *
 csv.field_size_limit(sys.maxsize)
 
 def plot_attention(dataset, 
-                   loader, 
+                   loader,
+                   caption_file,
                    audio_model, 
                    image_model, 
                    img_ids = None,
-                   out_dir='./'): # TODO
+                   out_dir='./',
+                   att_type='norm_over_image'): # TODO
   """ Generate the attention matrix learned by the word discovery model """
   device = 'cuda' if torch.cuda.is_available() else 'cpu'
   
   B = -1
+  
+  captions = []
+  with open(caption_file, 'r') as f:
+    for line in f:
+      captions.append(line.strip().split())
+  
   for i_b, batch in enumerate(loader):
     audio_input, image_input, nphones, nregions = batch
     D = image_input.size(-1)
@@ -38,30 +46,59 @@ def plot_attention(dataset,
     
     # Compute the dot-product attention weights
     for b in range(B):
-      example_id = i_b * B + b
+      example_id = dataset.keep_indices[i_b * B + b]
       img_id = dataset.image_keys[example_id]
+      segmentation = [0] 
+      segmentation.extend([seg[1] for seg in dataset.segmentations[example_id]])
+
+              
       if img_ids is not None and not img_id in img_ids:
         continue
       else:
         print('Example {}'.format(example_id))
         audio_output = audio_model(audio_input[b].unsqueeze(0))
-        image_output = image_model(image_input[b].unsqueeze(0))
-        matchmap = torch.mm(image_output[b], audio_output[b]).t()
-        attention = (matchmap[:nphones[b]]).softmax(-1).cpu().detach().numpy()  
+        pooling_ratio = round(audio_input.size(-1) / audio_output.size(-1))
+
+        caption = captions[example_id]
+        word_labels = ['']*audio_output.size(-1)
+        dur = round(float(segmentation[-1]) / (10 * pooling_ratio))
+        start = -1
+        for w, start_ms, end_ms in zip(caption, segmentation[:-1], segmentation[1:]):
+          start_ms, end_ms = float(start_ms), float(end_ms)
+          cur_start = int(start_ms / (10 * pooling_ratio))
+          if cur_start == start:
+            cur_start = start + 1
+          start = cur_start
+          word_labels[start] = w
         
+        image_output = image_model(image_input[b].unsqueeze(0))
+        matchmap = torch.mm(image_output.squeeze(0), audio_output.squeeze(0)).t()
+        if att_type == 'norm_over_image':
+          attention = (matchmap[:dur]).softmax(-1).cpu().detach().numpy()  
+        elif att_type == 'norm_over_audio':
+          attention = (matchmap[:dur]).softmax(0).cpu().detach().numpy()
+          
         # Plot the attention weights
-        fig, ax = plt.subplots(figsize=(30, 40))
-        ax.invert_yaxis()
+        fig, ax = plt.subplots(figsize=(8, 15))
 
         plt.pcolor(attention, cmap=plt.cm.Greys, vmin=attention.min(), vmax=attention.max())
         cbar = plt.colorbar()
         for tick in cbar.ax.get_yticklabels():
           tick.set_fontsize(30)
 
+        ax.set_xticks(np.arange(attention.shape[1]), minor=False)
+        ax.set_yticks(np.arange(attention.shape[0]), minor=False)
+        ax.set_yticklabels(word_labels)
+        
+        ax.invert_yaxis()
         for tick in ax.get_xticklabels():
           tick.set_fontsize(30)
-        # TODO Display word-level boundary labels
-        plt.savefig('{}/attention_{}_{}.png'.format(out_dir, img_id, example_id))
+
+        for tick in ax.get_yticklabels():
+          tick.set_fontsize(30)
+          
+        # Display word-level boundary labels
+        plt.savefig('{}/attention_{}_{}_{}.png'.format(out_dir, att_type, img_id, example_id))
   
   return image_ids
   
@@ -100,7 +137,6 @@ def plot_boxes(dataset,
             draw_bounding_box(im, box, labels=[str(i_box)], color=color[i_box % len(color)])
             cv2.imwrite('{}/{}_annotated.jpg'.format(out_dir, img_id), im)
   '''
-  
   if box_file.split('.')[-1] == 'json':
     with open(box_file, 'r') as fb:
       box_dict = json.load(fb)
@@ -121,10 +157,10 @@ def plot_clusters(embedding_vec_file,
                   out_file,
                   word_freq_file=None,
                   max_cluster_size=500,
-                  n_clusters=10): # TODO
+                  n_clusters=10):
   """ Visualize the clusters discovered by the system using t-SNE """
   PERSON_S_CLASS = ['man', 'woman', 'boy', 'girl', 'child']
-  P2S = {'men':'man', 'women':'woman', 'boys':'boy', 'girls':'girl', 'children':'child']
+  P2S = {'men':'man', 'women':'woman', 'boys':'boy', 'girls':'girl', 'children':'child'}
   colors = 'rgbkmy'
   dot = 'xo-' 
 
@@ -134,8 +170,8 @@ def plot_clusters(embedding_vec_file,
       self.class2idx[c_s] = len(self.class2idx)
  
   if not word_freq_file:
-    freqs = {c:0 for class2idx}
-    with open('{}_freqs.json'.format(out_file), 'w') as freq_f,\ 
+    freqs = {c:0 for c in class2idx}
+    with open('{}_freqs.json'.format(out_file), 'w') as freq_f,\
          open(word_segment_file, 'r') as seg_f:
       for line in seg_f:
         if w in class2idx:
@@ -216,6 +252,7 @@ if __name__ == '__main__':
 
   audio_root_path_test = os.path.join(args.data_dir, 'val2014/wav/') 
   image_root_path_test = os.path.join(args.data_dir, 'val2014/imgs/')
+  caption_file_test = os.path.join(args.data_dir, 'val2014/mscoco_val_text_captions.txt')
   segment_file_test = os.path.join(args.data_dir, 'val2014/mscoco_val_word_segments.txt')
   bbox_file_test = os.path.join(args.data_dir, 'val2014/mscoco_val_rcnn_feature.npz')
   split_file = os.path.join(args.data_dir, 'val2014/mscoco_val_split.txt')
@@ -235,16 +272,23 @@ if __name__ == '__main__':
   image_model = models.LinearTrans(input_dim=2048, embedding_dim=1024)
 
   indices = np.arange(1000)
-  example_ids = indices[:10] # np.random.permutation(indices)[:10]
+  example_ids = [dataset.keep_indices[ex] for ex in indices[:10]] # np.random.permutation(indices)[:10]
   img_ids = [dataset.image_keys[ex] for ex in example_ids]  
-  '''
   plot_attention(dataset, 
                  loader, 
+                 caption_file_test,
                  audio_model, 
                  image_model, 
                  out_dir=out_dir,
                  img_ids=img_ids)
-  
+  plot_attention(dataset, 
+                 loader, 
+                 caption_file_test,
+                 audio_model, 
+                 image_model, 
+                 out_dir=out_dir,
+                 img_ids=img_ids,
+                 att_type='norm_over_audio')
   plot_boxes(dataset,
              loader,
              box_file='{}/val2014/mscoco_val_bboxes_rcnn.json'.format(data_dir),
@@ -256,3 +300,4 @@ if __name__ == '__main__':
                 class2idx_file='{}/val2014/class2idx.json'.format(data_dir),
                 ds_ratio=16,
                 out_file='{}/word_clusters'.format(args.exp_dir)) # TODO
+  '''

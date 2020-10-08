@@ -50,6 +50,7 @@ class FullyContinuousMixtureAligner(object):
     self.trg_feats = target_features_train
     if self.pretrained_translateprob:
       self.P_ts = np.load(self.pretrained_translateprob)
+      print('Loaded pretrained translation probabilities')
     else:
       self.P_ts = 1./self.Ks * np.ones((self.Kt, self.Ks))
     self.trg2src_counts = np.zeros((self.Kt, self.Ks))
@@ -148,7 +149,7 @@ class FullyContinuousMixtureAligner(object):
       self.update_components() # XXX
       print('Iteration {}, log likelihood={}'.format(i_iter, log_prob))
       logger.info('Iteration {}, log likelihood={}'.format(i_iter, log_prob))
-      if i_iter % 5 == 0:
+      if (i_iter + 1) % 5 == 0:
         with open('{}_{}_means.json'.format(out_file, i_iter), 'w') as fm,\
              open('{}_{}_transprob.json'.format(out_file, i_iter), 'w') as ft:
           json.dump(self.src_model.means.tolist(), fm, indent=4, sort_keys=True)
@@ -399,11 +400,11 @@ def load_speechcoco(path):
   with open(test_image_ids_file, 'r') as f:
     test_image_ids = [i for i, line in enumerate(f) if int(line)] # XXX
 
-  gaussian_softmax = NegativeSquare(torch.FloatTensor(codebook), 1./80)
+  gaussian_softmax = NegativeSquare(torch.FloatTensor(codebook), 1./30)
   trg_feats_train = []
   trg_embedding_dim = -1
   K_t = codebook.shape[0]
-  for ex, k in enumerate(sorted(trg_feat_train_npz, key=lambda x:int(x.split('_')[-1]))[::3]): # XXX
+  for ex, k in enumerate(sorted(trg_feat_train_npz, key=lambda x:int(x.split('_')[-1]))[::2]): # XXX
     if ex == 0:
       trg_embedding_dim = trg_feat_train_npz[k].shape[-1]
   
@@ -432,7 +433,7 @@ def load_speechcoco(path):
           trg_feat = np.zeros((1, K_t))
       trg_feats_test.append(trg_feat)
       
-  src_feats_train = [src_feat_train_npz[k] for k in sorted(src_feat_train_npz, key=lambda x:int(x.split('_')[-1]))[::3]] # XXX
+  src_feats_train = [src_feat_train_npz[k] for k in sorted(src_feat_train_npz, key=lambda x:int(x.split('_')[-1]))[::2]] # XXX
   if len(src_feat_test_npz) > 1000:
     src_feats_test = [src_feat_test_npz[k] for i, k in enumerate(sorted(src_feat_test_npz, key=lambda x:int(x.split('_')[-1]))) if i in test_image_ids] # XXX
   else:
@@ -443,7 +444,9 @@ def load_speechcoco(path):
    
 if __name__ == '__main__':
   import argparse
+  import sklearn
   from sklearn.cluster import KMeans
+  from sklearn.mixture import BayesianGaussianMixture
   
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   parser.add_argument('--exp_dir', '-e', type=str, default='./', help='Experimental directory')
@@ -557,29 +560,30 @@ if __name__ == '__main__':
     var = 10.
     pretrained_vgmm_model = path.get('pretrained_vgmm_model', None)
   elif args.dataset == 'speechcoco':
-    Kt = 1000 # XXX
+    Kt = 200 # XXX
     Ks = 80
     print('Start initializing audio codebook ...')
     if not 'audio_codebook' in path:
       trg_feat_file_train = path['audio_feat_file_train']
       trg_feat_train_npz = np.load(trg_feat_file_train)
-      X = np.concatenate([trg_feat_train_npz[k] for k in sorted(trg_feat_train_npz, key=lambda x:int(x.split('_')[-1]))[::3]], axis=0) # XXX
-      codebook = KMeans(n_clusters=Kt).fit(X).cluster_centers_ 
+      X = np.concatenate([trg_feat_train_npz[k] for k in sorted(trg_feat_train_npz, key=lambda x:int(x.split('_')[-1]))[::2]], axis=0) # XXX
+      gmm = BayesianGaussianMixture(n_components=Kt, covariance_type='diag', weight_concentration_prior=1000.).fit(X)
+      codebook = gmm.means_ # KMeans(n_clusters=Kt).fit(X).cluster_centers_ # XXX
       np.save('{}/audio_codebook.npy'.format(args.exp_dir), codebook)
+      np.save('{}/audio_codebook_covariances.npy'.format(args.exp_dir), gmm.covariances_) # XXX
       path['audio_codebook'] = '{}/audio_codebook.npy'.format(args.exp_dir)
     print('Finish initializing the audio codebook!')
 
     src_feats_train, trg_feats_train, src_feats_test, trg_feats_test = load_speechcoco(path)
-    var = 160.
+    var = 160. # XXX
     pretrained_vgmm_model = path.get('pretrained_vgmm_model', None)
 
-  aligner = FullyContinuousMixtureAligner(src_feats_train,
-                                     trg_feats_train,
-                                     configs={'n_trg_vocab':Kt,
-                                              'n_src_vocab':Ks,
-                                              'var':var,
-                                              'pretrained_vgmm_model':pretrained_vgmm_model})
-  aligner.trainEM(15, '{}/mixture'.format(args.exp_dir)) # XXX
+  aligner = FullyContinuousMixtureAligner(src_feats_train, # XXX
+                                          trg_feats_train,
+                                          configs={'n_trg_vocab':Kt,
+                                                   'n_src_vocab':Ks,
+                                                   'var':var,
+                                                   'pretrained_vgmm_model':pretrained_vgmm_model})
+  aligner.trainEM(11, '{}/mixture'.format(args.exp_dir)) # XXX
   aligner.print_alignment('{}/alignment.json'.format(args.exp_dir))
-  # aligner.retrieve(src_feats_train, trg_feats_train, '{}/retrieval'.format(args.exp_dir))
   aligner.retrieve(src_feats_test, trg_feats_test, '{}/retrieval'.format(args.exp_dir)) 

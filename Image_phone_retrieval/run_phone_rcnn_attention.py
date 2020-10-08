@@ -87,7 +87,7 @@ if args.dataset == 'mscoco':
 else:
   args.data_dir = "/ws/ifp-53_2/hasegawa/lwang114/data/flickr30k/"
   train_loader = torch.utils.data.DataLoader(
-    dataloaders.ImagePhoneCaptionFlickrDataset(args.data_dir,'train',
+    dataloaders.ImagePhoneCaptionFlickrDataset(args.data_dir, 'train',
                                                max_nregions=15,
                                                image_feat_type='rcnn'),
     batch_size=args.batch_size, drop_last=True, shuffle=True, num_workers=args.worker, pin_memory=True)
@@ -111,7 +111,11 @@ if args.precompute_acoustic_feature:
   else:
     evaluation_attention(audio_model, image_model, attention_model, val_loader, args)
 else:
-  audio_model = models.DavenetSmall(input_dim=49, embedding_dim=512)
+  input_dim = 49
+  if args.dataset == 'flickr':
+    input_dim = 81
+  
+  audio_model = models.DavenetSmall(input_dim=input_dim, embedding_dim=512)
   image_model = models.LinearTrans(input_dim=2048, embedding_dim=512)
   attention_model = models.DotProductAttention(in_size=1024)
   if not args.only_eval:
