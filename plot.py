@@ -12,6 +12,10 @@ import base64
 import zlib
 import time
 import mmap
+import sklearn
+from sklearn.manifold import TSNE
+import seaborn as sns; sns.set()
+import pandas as pd
 from Image_phone_retrieval.steps.util import *
 
 csv.field_size_limit(sys.maxsize)
@@ -110,10 +114,87 @@ def plot_boxes(dataset,
         draw_bounding_box(im, box, labels=[str(i_box)], color=color[i_box % len(color)])
         cv2.imwrite('{}/{}_annotated.jpg'.format(out_dir, img_id), im)
      
-
-def plot_clusters(embedding_vec_file, word_segment_file, n_clusters=10): # TODO
+def plot_clusters(embedding_vec_file, 
+                  word_segment_file, 
+                  class2idx_file, 
+                  ds_ratio, 
+                  out_file,
+                  word_freq_file=None,
+                  max_cluster_size=500,
+                  n_clusters=10): # TODO
   """ Visualize the clusters discovered by the system using t-SNE """
-  pass
+  PERSON_S_CLASS = ['man', 'woman', 'boy', 'girl', 'child']
+  P2S = {'men':'man', 'women':'woman', 'boys':'boy', 'girls':'girl', 'children':'child']
+  colors = 'rgbkmy'
+  dot = 'xo-' 
+
+  with open(class2idx_file, 'r') as f:
+    class2idx = json.load(f)
+    for c_s in PERSON_S_CLASS:
+      self.class2idx[c_s] = len(self.class2idx)
+ 
+  if not word_freq_file:
+    freqs = {c:0 for class2idx}
+    with open('{}_freqs.json'.format(out_file), 'w') as freq_f,\ 
+         open(word_segment_file, 'r') as seg_f:
+      for line in seg_f:
+        if w in class2idx:
+          freqs[class2idx[w]] += 1
+        elif w in P2S:
+          freqs[class2idx[P2S[w]]] += 1
+      json.dump(freqs, freq_f, indent=4, sort_keys=True)
+  else:
+    with open('{}_freqs.json'.format(out_file), 'r') as freq_f:
+      freqs = json.load(f)
+  
+  classes = sorted(class2idx, key=lambda x:freqs[x], reverse=True)[:n_clusters]     
+  cluster_sizes = {c:0 for c in classes}
+  embedding_vec_npz = np.load(embedding_vec_file)
+  ex = 0
+  cur_capt_id = ''
+  embeddings = []
+  labels = []
+  sent = []
+  with open(word_segment_file, 'r') as seg_f:
+      for line in seg_f:
+        parts = line.split()
+        capt_id, w, start, end = parts
+
+        if capt_id != cur_capt_id:
+          cur_capt_id = capt_id
+     
+        parts = line.split()
+        capt_id, w, start, end = parts
+
+        if capt_id != cur_capt_id:
+          cur_capt_id = capt_id
+          sent = [w]
+          ex += 1
+        else:
+          sent.append(w)
+        
+        if not w in class2idx and not w in P2S:
+          continue
+        elif w in P2S:
+          w = P2S[w] 
+        
+        if cluster_sizes[w] >= max_cluster_size:
+          continue
+        else:
+          cluster_sizes[w] += 1  
+          embeddings.append(embedding_vec_npz['arr_{}'.format(ex)][len(sent)-1])
+          labels.append(w)
+
+  X = np.concatenate(embeddings, axis=0)
+  tsne = TSNE(n_components=len(cluster2idx))
+  X_embedded = tsne.fit_transform(X)
+  cluster_dfs = pd.DataFrame({'x': X_embedded[:, 0],
+                              'y': X_embedded[:, 1],
+                              'cluster_label': y})
+  cluster_dfs.to_csv('{}_dataframe.csv'.format(out_file), cluster_dfs)
+  sns.scatterplot(data=cluster_dfs, x='x', y='y', hue='cluster_label', stype='cluster_label') 
+  plt.savefig('{}_tsne_plot.png'.format(out_file))
+ 
 
 if __name__ == '__main__':
   import Image_phone_retrieval.models as models
@@ -127,6 +208,7 @@ if __name__ == '__main__':
   args = parser.parse_args()
   
   out_dir = '{}/outputs/'.format(args.exp_dir)
+  data_dir = '/ws/ifp-53_2/hasegawa/lwang114/data/mscoco'
   if not os.path.isdir(out_dir):
     os.mkdir(out_dir)
   audio_model_file = '{}/models/best_audio_model.pth'.format(args.exp_dir)
@@ -162,9 +244,15 @@ if __name__ == '__main__':
                  image_model, 
                  out_dir=out_dir,
                  img_ids=img_ids)
-  '''
+  
   plot_boxes(dataset,
              loader,
-             box_file='/ws/ifp-53_2/hasegawa/lwang114/data/mscoco/val2014/mscoco_val_bboxes_rcnn.json',
-             data_dir='/ws/ifp-53_2/hasegawa/lwang114/data/mscoco/val2014/imgs/val2014',
+             box_file='{}/val2014/mscoco_val_bboxes_rcnn.json'.format(data_dir),
+             data_dir='{}/val2014/imgs/val2014'.format(data_dir),
              img_ids=img_ids)
+  '''
+  plot_clusters(embedding_vec_file='/ws/ifp-53_1/hasegawa/tools/espnet/egs/discophone/ifp_lwang114/magnet/Image_phone_retrieval/exp/mscoco_val_davenet_features/test_features_300dim.npz', # TODO
+                word_segment_file='{}/val2014/mscoco_val_word_segments.txt'.format(data_dir),
+                class2idx_file='{}/val2014/class2idx.json'.format(data_dir),
+                ds_ratio=16,
+                out_file='{}/word_clusters'.format(args.exp_dir)) # TODO
