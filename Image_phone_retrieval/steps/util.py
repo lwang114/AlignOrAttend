@@ -24,7 +24,11 @@ def calc_recalls(image_outputs, audio_outputs, args, nframes, simtype='MISA', nr
             S_a = torch.FloatTensor(np.load(args.alignment_scores))
             S = (S.softmax(0) + S.softmax(1)) / 2 * S_a
     else:
-        S = compute_matchmap_similarity_matrix(image_outputs, audio_outputs, nframes, nregions=nregions, simtype=simtype)
+        if simtype == 'ASISA' or simtype == 'BASISA':
+            print('Compute attentive matchmap similarity ...') # XXX
+            S = compute_attentive_matchmap_similarity_matrix(image_outputs, audio_outputs, nframes, nregions=nregions, simtype=simtype)
+        else:
+            S = compute_matchmap_similarity_matrix(image_outputs, audio_outputs, nframes, nregions=nregions, simtype=simtype)
         if args.alignment_scores:
             S_a = torch.FloatTensor(np.load(args.alignment_scores))
             S = (S.softmax(0) + S.softmax(1)) / 2 * S_a # XXX
@@ -192,7 +196,7 @@ def mask_margin_softmax_loss(image_outputs, audio_outputs, nframes, margin=0.001
     loss = loss / n
     return loss
 
-def attentive_mask_margin_softmax_loss(image_outputs, audio_outputs, attention_model, nframes, margin=0.001, simtype='unidirection', nregions=None):
+def attentive_mask_margin_softmax_loss(image_outputs, audio_outputs, attention_model, nframes, margin=0.001, simtype='ASISA', nregions=None):
     """
     image_outputs: B x D x R tensor
     audio_outputs: B x D x T  tensor
@@ -248,7 +252,7 @@ def compute_matchmap_similarity_matrix(image_outputs, audio_outputs, nframes, si
                 '''
     return S
 
-def compute_attentive_matchmap_similarity_matrix(image_outputs, audio_outputs, nframes, simtype='unidirectional', nregions=None):
+def compute_attentive_matchmap_similarity_matrix(image_outputs, audio_outputs, nframes, simtype='ASISA', nregions=None):
     """
     Assumes image_outputs is a (batchsize, embedding_dim, rows, height) tensor
     Assumes audio_outputs is a (batchsize, embedding_dim, 1, time) tensor
@@ -263,9 +267,15 @@ def compute_attentive_matchmap_similarity_matrix(image_outputs, audio_outputs, n
                 nF = max(1, nframes[audio_idx])
                 if len(nregions):
                   nR = max(1, nregions[image_idx])
-                  S[image_idx, audio_idx] = computeAttentiveSim(image_outputs[image_idx][:, 0:nR], audio_outputs[audio_idx][:, 0:nF])
+                  if simtype == 'ASISA':
+                      S[image_idx, audio_idx] = computeAttentiveSim(image_outputs[image_idx][:, 0:nR], audio_outputs[audio_idx][:, 0:nF])
+                  elif simtype == 'BASISA':
+                      S[image_idx, audio_idx] = computeBiAttentiveSim(image_outputs[image_idx][:, 0:nR], audio_outputs[audio_idx][:, 0:nF])
                 else:
-                  S[image_idx, audio_idx] = computeAttentiveSim(image_outputs[image_idx][:, 0:nR], audio_outputs[audio_idx][:, 0:nF])
+                  if simtype == 'ASISA':
+                      S[image_idx, audio_idx] = computeAttentiveSim(image_outputs[image_idx][:, 0:nR], audio_outputs[audio_idx][:, 0:nF])
+                  elif simtype == 'BASISA':
+                      S[image_idx, audio_idx] = computeBiAttentiveSim(image_outputs[image_idx][:, 0:nR], audio_outputs[audio_idx][:, 0:nF])
     return S
 
 

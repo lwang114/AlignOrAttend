@@ -107,8 +107,6 @@ def train_attention(audio_model, image_model, attention_model, train_loader, tes
             pooling_ratio = round(audio_input.size(-1) / audio_output.size(-1))
             nphones = nphones // pooling_ratio
 
-            # loss_before_attn = mask_margin_softmax_loss(image_output, audio_output,
-            #                                     nphones, nregions=nregions, margin=args.margin, simtype=args.simtype)
             loss = attentive_mask_margin_softmax_loss(image_output, audio_output, attention_model,
                                                       nphones, nregions=nregions, margin=args.margin, simtype=args.simtype)
             loss.backward()

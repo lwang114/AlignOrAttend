@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from espnet.nets.pytorch_backend.transformer.encoder import Encoder
+from espnet.nets.pytorch_backend.nets_utils import make_non_pad_mask
         
 # class for making multi headed attenders.
 class multi_attention(nn.Module):
@@ -134,7 +136,6 @@ class SentenceRNN(nn.Module):
         return out
 
 
-
 class CNN_RNN_ENCODER(nn.Module):
     def __init__(self,embedding_dim,n_layer):
         super(CNN_RNN_ENCODER,self).__init__()
@@ -164,3 +165,26 @@ class CNN_RNN_ENCODER(nn.Module):
             x = self.att(x)
 
             return x
+
+class Transformer(nn.Module):
+    def __init__(self,embedding_dim):
+        super(Transformer, self).__init__()
+        self.idim = 40
+        self.encoder = Encoder(idim=40,
+                               attention_dim=embedding_dim,
+                               attention_heads=1,
+                               linear_units=embedding_dim,
+                               input_layer='conv2d',
+                               num_blocks=3)
+
+    def forward(self, x, save_features=False):
+        if x.dim() < 3:
+            x = x.unsqueeze(0)
+        d = x.size(-1)
+        if self.idim != d:
+            x = x.transpose(1, 2)
+        masks = make_non_pad_mask([x.size(1)]*x.size(0)).to(x.device).unsqueeze(-2)
+        x, _ = self.encoder(x, masks)
+        if d != self.idim:
+            x = x.transpose(1, 2)
+        return x

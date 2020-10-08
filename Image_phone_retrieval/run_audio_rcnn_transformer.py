@@ -89,7 +89,7 @@ if args.dataset == 'mscoco':
                                            segment_file_train,
                                            bbox_file_train,
                                            configs={}),
-      batch_size=args.batch_size, shuffle=False, num_workers=args.worker, pin_memory=True)
+      batch_size=args.batch_size, shuffle=True, num_workers=args.worker, pin_memory=True)
     
     val_loader = torch.utils.data.DataLoader(
       dataloaders.OnlineImageAudioCaptionDataset(audio_root_path_test,
@@ -126,7 +126,7 @@ if args.precompute_acoustic_feature:
   else:
     evaluation_attention(audio_model, image_model, attention_model, val_loader, args)
 else:
-  audio_model = models.Davenet(embedding_dim=1024)
+  audio_model = models.Transformer(embedding_dim=1024)
   image_model = models.LinearTrans(input_dim=2048, embedding_dim=1024)
   attention_model = models.DotProductAttention(in_size=1024)
   if not args.only_eval:
