@@ -3,6 +3,7 @@ import json
 import os
 import argparse
 import pkg_resources 
+import logging
 from tde.readers.gold_reader import *
 from tde.readers.disc_reader import *
 from tde.measures.grouping import * 
@@ -18,7 +19,7 @@ def compute_cluster_labels(feat_file,
 
 def attention_to_alignment(attention_file, 
                            image_concept_file,
-                           out_file): # TODO Generate alignment without image concept_file
+                           out_file):
 
   with open(attention_file, 'r') as att_f,\
        open(image_concept_file, 'r') as concept_f,\
@@ -31,10 +32,10 @@ def attention_to_alignment(attention_file,
       image_concept = image_concepts[ex]
       alignment = np.argmax(attention, axis=0)
       align_dicts.append({'alignment': alignment,
-                        'image_concept': image_concept})
+                          'image_concept': image_concept})
     json.dump(align_dicts, align_f)
   
-def alignment_to_word_units(alignment_file, 
+def speechcoco_extract_word_units(alignment_file, 
                             caption_file,
                             class2idx_file,
                             out_file):
@@ -111,7 +112,154 @@ def alignment_to_word_units(alignment_file,
         pred_f.write('Class {}:\n'.format(c))
         pred_f.write('\n'.join(pred_units[c]))
         pred_f.write('\n\n')
-          
+
+def match_boxes(pred_boxes, gold_boxes):
+  # Inputs:
+  # ------
+  #   pred_boxes: [(x^i, y^i, w^i, h^i, label^i_1,..., label^i_L) for i in range(len(pred_boxes))] 
+  #   gold_boxes: [(x^i, y^i, w^i, h^i, label^i_1,..., label^i_L) for i in range(len(gold_boxes))] 
+  #
+  # Outputs:
+  # -------
+  #   units: [(j_i, x^{j_i}, y^{j_i}, w^{j_i}, h^{j_i}, label^{j_i}_1,..., label^{j_i})_L) for i in range(len(pred_boxes))]
+  units = []
+  gold_labels = [' '.join(gbox[4:]) for gbox in gold_boxes]
+  
+  for pbox in pred_boxes:
+    ious = []
+    for gbox in gold_boxes:
+      ious.append(IoU(pbox[:4], gbox[:4]))
+    i_best = np.argmax(ious)
+    units.append([i_best]+gold_boxes[i_best])
+  return units
+  
+
+def match_caption_with_boxes(caption, boxes):
+  # Inputs:
+  # ------
+  #   caption: [[w for w in sent] for sent in corpus]
+  #   boxes: [(x^i, y^i, w^i, h^i, label^i_1,..., label^i_l) for i in range(len(boxes))]
+  #
+  # Outputs:
+  # -------
+  #   units: [(start_{t_i}, end_{t_i}, label_{t_i}) for i in range(len(boxes))]
+  units = []
+  for box in boxes:
+    labels = ' '.join(box[4:])
+    start = caption.find(labels)
+    if start == -1:
+      print('Warning: string not found')
+    else:
+      units.append([start, start+len(box[4:]), labels])
+  return units
+
+def flickr_extract_gold_units(caption_file,
+                       box_file,
+                       pron_file,
+                       out_file):
+  with open(caption_file, 'r') as capt_f,\
+       open(box_file, 'r') as box_f,\
+       open(pron_file, 'w') as pron_f,\
+       open('{}.wrd'.format(out_file), 'w') as wrd_f,
+       open('{}.phn'.format(out_file), 'w') as phn_f:
+      pron_dict = json.load(pron_f)
+      captions = []
+      for line in capt_f
+        caption = [pron_dict[w] for w in line.split() if w in pron_dict] # TODO Check the format of the pronunciation dict
+      
+      boxes = []
+      cur_img_key = ''
+      for line_box in box_f:
+        raw_box_info = line_box.strip().split()
+        box_info = [float(x) for x in raw_box_info[1:5]]
+        for label in raw_box_info[5:]:
+          if not label in pron_dict:
+            continue
+          box_info.append(pron_dict[label])
+
+        if box_info[0] != cur_img_key:
+          boxes = [box_info[1:]]
+          cur_img_key = box_info[0]
+        else:
+          boxes.append(box_info[1:])
+      
+      for ex, (caption, box) in enumerate(zip(captions, boxes)):
+        units = match_caption_with_boxes(caption, box)
+        for unit in units:
+          wrd_f.write('arr_{} {} {} {}'.format(ex, unit[0], unit[1], ','.join(unit[2:]))) # TODO Extract noun phrases as label instead
+          start = unit[0]
+          for wrd in unit.split(' '): # XXX Assume the words in a phrase are separated by spaces
+            for phn in wrd.split(','): # XXX Assume the words in a phrase are separated by commas
+              phn_f.write('arr_{} {} {} {}'.format(ex, start, start+1, phn))
+              start += 1
+
+def flickr_extract_pred_units(pred_alignment_file,
+                              segmented_caption_file,
+                              pred_box_file, 
+                              gold_box_file,
+                              pron_file,
+                              out_file): 
+  # For each predicted box, find the gold box with which it overlaps the most;
+  # Use the phrase of the gold box as its phrase
+  pred_units = {}
+  with open(pred_alignment_file, 'r') as pred_align_f,\
+       open(segmented_caption_file, 'r') as capt_f,\
+       open(pronunciation_file, 'r') as pron_f,\
+       open(pred_box_file, 'r') as pred_box_f,\
+       open(gold_box_file, 'r') as gold_box_f,\
+       open(out_file, 'w') as out_f:
+    pron_dict = json.load(pron_f)   
+    captions = [line.strip().split() for line in capt_f]
+    segmentations = [] 
+    for caption in captions:
+      start = 0
+      segmentation = []
+      for w in caption.split():
+        dur = len(w.split(','))
+        segmentation.append([start, start+dur])
+        start += dur
+      segmentations.append(segmentation)
+
+    pred_alignments = json.load(pred_align_f)
+    
+    gold_boxes = []
+    cur_img_key = ''
+    for line_box in gold_box_f:
+      raw_box_info = line_box.strip().split()
+      box_info = [float(x) for x in raw_box_info[1:5]]
+      for label in raw_box_info[5:]:
+        if not label in pron_dict:
+          continue
+        box_info.append(pron_dict[label])
+
+      if box_info[0] != cur_img_key:
+        gold_boxes = [box_info[1:]]
+        cur_img_key = box_info[0]
+      else:
+        gold_boxes.append(box_info[1:])
+    
+    # TODO Load predicted boxes
+    pred_boxes = []
+
+  for ex, (caption, pred_box, gold_box, segmentation, align_info) in enumerate(zip(captions, pred_boxes, gold_boxes, segmentations, pred_alignments)):
+    box_alignment = match_boxes(pred_box, gold_box)
+    
+    alignment = align_info['alignment']
+    for i_pred_box, align_idx in enumerate(alignment): 
+      gold_box = box_alignment[i_pred_box][1:]
+      segment = segmentation[caption[align_idx]] 
+      label = ':'.join(gold_box[4:])
+      if not label in pred_units:
+        pred_units[label] = ['arr_{} {} {}'.format(ex, segment[0], segment[1])]
+      else:
+        pred_units[label].append(['arr_{} {} {}'.format(ex, segment[0], segment[1])])
+
+  with open('{}_discovered_words.class'.format(out_file), 'w') as pred_f:
+    for i_label, label in enumerate(pred_units):
+      pred_f.write('Class {}\n'.join(label))
+      pred_f.write('\n'.join(pred_units)
+      pred_f.write('\n')
+    
 def cluster_to_word_units(cluster_file,
                           out_file):
   pred_units = {}
@@ -318,7 +466,7 @@ if __name__ == '__main__':
   caption_file = '{}/train2014/mscoco_train_text_captions.txt'.format(data_root)
   class2idx_file = '{}/concept2idx_65class.json'.format(data_root)
 
-  alignment_to_word_units(alignment_file, 
+  speechcoco_alignment_to_word_units(alignment_file, 
                           caption_file, 
                           class2idx_file,
                           out_file='{}/mscoco'.format(args.exp_dir))
