@@ -446,8 +446,24 @@ def align(audio_model, image_model, val_loader, args):
 
             pooling_ratio = round(audio_input.size(-1) / audio_output.size(-1))
             n = image_output.size(0)
-            
+           
+            # TODO Optionally segment the acoustic features 
+            boundaries = None
+            if nphones.dim() > 1:
+                print('Segmentations detected, segment the acoustic features...')
+                boundaries = nphones.cpu().detach().numpy()
+
             for i_b in range(n):
+              if nphones.dim() > 1:
+                starts = np.nonzero(boundaries[i_b, 0])[0] // pooling_ratio
+                ends = np.nonzero(boundaries[i_b, 1])[0] // pooling_ratio
+                mask = np.zeros((len(starts), audio_output.size(1))) 
+                if len(starts) == 0:
+                    continue
+                for i_seg, (start, end) in enumerate(zip(starts, ends)): 
+                    mask[i_seg, start:end] = 1. / max(end - start, 1)
+                mask = torch.FloatTensor(mask).to(device=device)
+                audio_output = torch.matmul(mask, audio_output)
               M = computeMatchmap(image_output[i_b], audio_output[i_b])
               alignment_out = np.argmax(M.squeeze().numpy(), axis=0).tolist()
               alignment_resampled = [i_a for i_a in alignment_out for _ in range(pooling_ratio)]

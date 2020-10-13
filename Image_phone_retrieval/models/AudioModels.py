@@ -75,7 +75,7 @@ class Davenet(nn.Module):
         self.conv5 = nn.Conv2d(512, embedding_dim, kernel_size=(1,17), stride=(1,1), padding=(0,8))
         self.pool = nn.MaxPool2d(kernel_size=(1,3), stride=(1,2),padding=(0,1))
 
-    def forward(self, x):
+    def forward(self, x, l=5):
         if x.dim() == 3:
             x = x.unsqueeze(1)
         x = self.batchnorm1(x)
@@ -84,8 +84,12 @@ class Davenet(nn.Module):
         x = self.pool(x)
         x = F.relu(self.conv3(x))
         x = self.pool(x)
+        if l == 3:
+            return x
         x = F.relu(self.conv4(x))
         x = self.pool(x)
+        if l == 4:
+            return x
         x = F.relu(self.conv5(x))
         x = self.pool(x)
         x = x.squeeze(2)

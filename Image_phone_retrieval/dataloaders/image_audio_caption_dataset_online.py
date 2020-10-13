@@ -50,8 +50,7 @@ class OnlineImageAudioCaptionDataset(Dataset):
           audio_file_prefix = '_'.join('_'.join(word_segment_dict[1].split('_')[:-1]) for word_segment_dict in segment_dicts[k]['data_ids'])
           if self.audio_root_path.split('.')[-1] == 'json':
               k_expanded = '{}_{:06d}'.format('_'.join(k.split('_')[:-1]), int(k.split('_')[-1]))
-              self.audio_keys.append(audio_feat_dict[k_expanded]['input'][0]['feat'])
-              
+              self.audio_keys.append(audio_feat_dict[k_expanded]['input'][0]['feat'])              
           else:
               self.audio_keys.append(audio_file_prefix)
           segmentation = []
@@ -150,15 +149,15 @@ class OnlineImageAudioCaptionDataset(Dataset):
     self.skip_ms = self.configs.get('skip_size', 10)
     self.window_ms = self.configs.get('window_len', 25)
 
-    phone_boundary = np.zeros(self.max_nframes+1)
+    phone_boundary = np.zeros((2, self.max_nframes+1))
     nphones = 0
     for i_s, segment in enumerate(self.segmentations[idx]):
       start_ms, end_ms = segment
       start_frame, end_frame = int(float(start_ms) / 10), int(float(end_ms) / 10)
       if end_frame > self.max_nframes:
         break
-      phone_boundary[start_frame] = 1.
-      phone_boundary[end_frame] = 1.
+      phone_boundary[0, start_frame] = 1.
+      phone_boundary[1, end_frame] = 1.
 
     if self.audio_root_path.split('.')[-1] == 'json': # Assume kaldi format if audio_root_path is a json file
         mfcc = kaldiio.load_mat(self.audio_keys[idx])
