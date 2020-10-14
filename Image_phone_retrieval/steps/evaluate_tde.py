@@ -9,6 +9,7 @@ import logging
 import nltk
 from nltk.stem import WordNetLemmatizer
 from nltk.corpus import stopwords
+import time
 '''
 from tde.readers.gold_reader import *
 from tde.readers.disc_reader import *
@@ -24,45 +25,55 @@ STOP = stopwords.words('english') + ['er', 'oh', 'ah', 'uh', 'um', 'ha']
 PERSON_S_CLASS = ['man', 'woman', 'boy', 'girl', 'child']
 P2S = {'men':'man', 'women':'woman', 'boys':'boy', 'girls':'girl', 'children':'child'}
 NULL = '<NULL>'
-def load_segmented_captions(capt_file, dataset='flickr'):
+def load_segmented_captions(capt_file, 
+                            dataset='flickr',
+                            segment_type='pred'):
     captions = []
     segmentations = []
     # Load captions and segmentation
-    if dataset == 'flickr':
+    if dataset == 'flickr' or (dataset == 'mscoco' and segment_type == 'pred'):
       with open(capt_file, 'r') as capt_f:
           for line_capt in capt_f:
               caption = line_capt.strip().split()
               captions.append(caption)
-
               start = 0
               segmentation = []
               for w in caption:
                   dur = len(w.split(','))
                   segmentation.append([start, start+dur])
                   start += dur
-              segmentations.append(segmentation)
-    elif dataset == 'speechcoco':
-      prev_start_frame, prev_end_frame = -1, -1 # XXX
+              segmentations.append(segmentation) 
+              # if len(captions) == 500: # XXX
+              #   break
+      assert len(captions) == len(segmentations)
+    elif dataset == 'speechcoco' or (dataset == 'mscoco' and segment_type == 'gold'):
+      # prev_start_frame, prev_end_frame = -1, -1 # XXX
       with open(capt_file, 'r') as capt_f:
         captions = []
         cur_capt_id = ''
         for line_capt in capt_f:
-          capt_id, word, start, end = line_capt.strip().split() # TODO Confirm format
-          start_frame, end_frame = int(float(start) / 10), int(float(end) / 10)
+          capt_id, word, start, end = line_capt.strip().split() 
+          if dataset == 'speechcoco':
+            start_frame, end_frame = int(float(start) / 10), int(float(end) / 10)
+          else:
+            start_frame, end_frame = int(start), int(end)
+
           if capt_id != cur_capt_id:
+            # if len(captions) >= 500: # XXX
+            #   break
             captions.append([word])
             segmentations.append([(start_frame, end_frame)])
             cur_capt_id = capt_id
-            prev_start_frame = start_frame # XXX
-            prev_end_frame = end_frame # XXX
+            # prev_start_frame = start_frame # XXX
+            # prev_end_frame = end_frame # XXX
           else:
-            if prev_end_frame > 0 and start_frame != prev_end_frame:
-              segmentations[-1].append((prev_end_frame, start_frame)) # XXX Temporary: include the time gap between consecutive words
-              captions[-1].append(NULL)
+            # if prev_end_frame > 0 and start_frame != prev_end_frame:
+            #   segmentations[-1].append((prev_end_frame, start_frame)) # XXX Temporary: include the time gap between consecutive words
+            #   captions[-1].append(NULL)
             captions[-1].append(word)
             segmentations[-1].append((start_frame, end_frame))
-            prev_start_frame = start_frame # XXX
-            prev_end_frame = end_frame # XXX
+            # prev_start_frame = start_frame # XXX
+            # prev_end_frame = end_frame # XXX
 
     return captions, segmentations
 
@@ -90,10 +101,9 @@ def load_boxes(box_file,
     for line_box in box_f:
       raw_box_info = line_box.strip().split()
       img_key = raw_box_info[0]
-
       assert box_type in {'gold', 'pred'}
       if box_type == 'gold':      
-        if dataset == 'speechcoco':
+        if dataset == 'speechcoco' or dataset.split('_')[0] == 'mscoco':
           x, y, w, h = raw_box_info[-4:]
           x, y, w, h = float(x), float(y), float(w), float(h)
           box_info = [x, y, x+w, y+h, raw_box_info[1]]
@@ -101,43 +111,27 @@ def load_boxes(box_file,
             class2idx[raw_box_info[1]] = len(class2idx)
         else: 
           box_info = [float(x) for x in raw_box_info[-4:]]
-        # TODO Extract the last nouns as label of the region; if no noun exists, choose the whole phrase
-        '''
-        pos_tags = nltk.pos_tag(raw_box_info[1:-4])
-        found = 0
-        for label, tag in pos_tags[::-1]:
-            if tag[0] == 'N':
-                label = lemmatizer.lemmatize(label.lower())
-                if (not label in top_words) or (label in STOP+PUNCT): 
-                    continue
-                else:
-                    found = 1
-                    break
-        if found:
-            c = ','.join(pron_dict[label])
-            box_info.append(c)
-        else:
-        '''
-        if dataset == 'flickr':
-          for label in raw_box_info[1:-4]:
-            if (not label in top_words) or (label in STOP+PUNCT): 
-              continue
-            c = ','.join(pron_dict[label])
-            box_info.append(c)
-          class2idx['_'.join(box_info[4:])] = len(class2idx)
+          if dataset == 'flickr':
+            for label in raw_box_info[1:-4]:
+              if (not label in top_words) or (label in STOP+PUNCT): 
+                continue
+              c = ','.join(pron_dict[label])
+              box_info.append(c)
+            class2idx['_'.join(box_info[4:])] = len(class2idx)
 
       elif box_type == 'pred':
         if dataset == 'flickr':
           box_info = [float(x) for x in raw_box_info[2:6]]
-
+        else:
+          raise NotImplementedError('Cannot handle predicted boxes for dataset {} yet'.format(dataset))
+          
       if img_key != cur_img_key:
         ex += 1
-        # if ex >= 500: # XXX
-        #   break
         boxes.append([box_info])
         img_keys.append(img_key)
         cur_img_key = img_key
-        # print('Number of images={}, number of images kept={}, image key={}'.format(len(img_keys), ex, img_key))
+        # if len(img_keys) >= 500: # XXX
+        #   break
       else:
         boxes[-1].append(box_info)
     box_f.close()
@@ -164,7 +158,6 @@ def match_boxes(pred_boxes, gold_boxes):
   for pbox in pred_boxes:
     ious = []
     for gbox in gold_boxes:
-      # print(pbox[:4], gbox[:4])
       ious.append(IoU(pbox[:4], gbox[:4]))
 
     i_best = np.argmax(ious)
@@ -187,9 +180,10 @@ def match_caption_with_boxes(caption, boxes):
       box.append(NULL)
     labels = box[4:]
     start = find_segment(labels, caption)
-    if start == -1:
-      print('Warning: string {} not found in {}'.format(labels, caption))
-    else:
+    # if start == -1:  
+    #  print('Warning: string {} not found in {}'.format(labels, caption))
+    # else:
+    if start != -1:
       n_phones = 0
       for w in box[4:]:
         n_phones += len(w.split(','))
@@ -200,27 +194,23 @@ def match_caption_with_boxes(caption, boxes):
 def speechcoco_extract_gold_units(caption_file, 
                                   box_file,
                                   class2idx_file=None,
-                                  out_file='speechcoco'):
+                                  out_file='speechcoco',
+                                  ds_ratio=1):
+  begin_time = time.time()
+  print('Begin extracting gold units for speechcoco...')
   # Read caption corpus, alignments and concept cluster labels 
   captions = []
   concepts = []
   with open(caption_file, 'r') as capt_f:
     for line in capt_f:
       captions.append(line.strip().split()) 
-    ''' 
-    class2idx = json.load(class2idx_f)
-    for c in PERSON_S_CLASS:
-      class2idx[c] = len(class2idx) 
-    class2idx['not_visual'] = len(class2idx)
-    json.dump(class2idx, new_class_f, indent=4, sort_keys=True)
-    '''
-  
+
   captions, segmentations = load_segmented_captions(caption_file, dataset='speechcoco')
-  captions = captions[::3] # XXX
-  segmentations = segmentations[::3]
+  captions = captions[::ds_ratio]
+  segmentations = segmentations[::ds_ratio]
   boxes, img_ids = load_boxes(box_file, dataset='speechcoco', out_file=out_file)
-  boxes = boxes[::3]
-  img_ids = img_ids[::3]
+  boxes = boxes[::ds_ratio]
+  img_ids = img_ids[::ds_ratio]
   ignore_ids = []
   print('Number of captions={}, number of segmentations={}, number of boxes={}'.format(len(captions), len(segmentations), len(boxes)))
 
@@ -232,7 +222,7 @@ def speechcoco_extract_gold_units(caption_file,
       for img_id, caption, segmentation, box in zip(img_ids, captions, segmentations, boxes):
         caption = [w if not w in PERSON_S_CLASS else 'person' for w in caption]
         caption = [w if not w in P2S else 'person' for w in caption]
-        units = match_caption_with_boxes(caption, box) # TODO Consider a broader person class
+        units = match_caption_with_boxes(caption, box) 
         if len(units) == 0:
             ignore_ids.append(img_id)
             continue
@@ -247,6 +237,7 @@ def speechcoco_extract_gold_units(caption_file,
           phone_f.write('{}_{} {} {} {}\n'.format(img_id, ex, start, end, unit[3]))
           word_f.write('{}_{} {} {} {}\n'.format(img_id, ex, start, end, unit[3]))
           link_f.write('{}_{} {} {} {}\n'.format(img_id, ex, unit[1], start, end))
+  print('Finish extracting gold units after {} s!\n'.format(time.time() - begin_time))
   return ignore_ids
           
 def speechcoco_extract_pred_units(pred_alignment_file,
@@ -254,7 +245,11 @@ def speechcoco_extract_pred_units(pred_alignment_file,
                                   pred_box_file, 
                                   gold_box_file,
                                   ignore_ids=None,
-                                  out_file='speechcoco'):
+                                  ds_ratio=1, 
+                                  out_file='speechcoco',
+                                  include_null=False):
+  begin_time = time.time()
+  print('Begin extracting predicted units for speechcoco...')
   with open(alignment_file, 'r') as align_f,\
        open('{}_discovered_words.class'.format(out_file), 'w') as pred_f,\
        open('{}_discovered_links.txt'.format(out_file), 'w') as pred_link_f:
@@ -262,12 +257,12 @@ def speechcoco_extract_pred_units(pred_alignment_file,
     alignments = json.load(align_f)
     gold_boxes, img_ids = load_boxes(gold_box_file, dataset='speechcoco')
     pred_boxes = json.load(open(pred_box_file, 'r'))
-    gold_boxes = gold_boxes[::3] # XXX
-    img_ids = img_ids[::3]
+    gold_boxes = gold_boxes[::ds_ratio]
+    img_ids = img_ids[::ds_ratio]
     pred_boxes = [pred_boxes[img_id] for img_id in sorted(pred_boxes, key=lambda x:int(x.split('_')[-1])) if '_'.join(img_id.split('_')[:-1]) in img_ids]
     captions, segmentations = load_segmented_captions(segment_file, dataset='speechcoco') 
-    captions = captions[::3] # XXX
-    segmentations = segmentations[::3]
+    captions = captions[::ds_ratio]
+    segmentations = segmentations[::ds_ratio]
 
     print('Number of images with predicted boxes={}, number of images with gold boxes={}'.format(len(pred_boxes), len(gold_boxes)))
     print('Number of captions={}, number of segmentations={}'.format(len(captions), len(segmentations)))
@@ -275,18 +270,23 @@ def speechcoco_extract_pred_units(pred_alignment_file,
     pred_units = {}
     pred_links = []
     ex = -1
-    for img_id, pred_box, gold_box in zip(img_ids, pred_boxes, gold_boxes):
+    for img_id, pred_box, gold_box, caption, segmentation, align_info in zip(img_ids, pred_boxes, gold_boxes, captions, segmentations, alignments):
         if img_id in ignore_ids:
             continue
         ex += 1
-        alignment = alignments[ex]['alignment']
-        segmentation = segmentations[ex]
+        alignment = align_info['alignment']
         box_alignment = match_boxes(pred_box, gold_box)
 
+        print('{}_{}'.format(img_id, ex))
+        print(caption, len(caption))
+        print(alignment)
+        print(segmentation, len(segmentation))
         for i_pred_box, align_idx in enumerate(alignment):
           i_gold_box = box_alignment[i_pred_box][0]
           gold_box = box_alignment[i_pred_box][1:]
-          segment = segmentation[align_idx]
+          if include_null and align_idx == 0:
+              continue
+          segment = segmentation[align_idx] if not include_null else segmentation[align_idx-1]
           label = gold_box[4]
 
           if not label in pred_units:
@@ -295,15 +295,124 @@ def speechcoco_extract_pred_units(pred_alignment_file,
             pred_units[label].append('{}_{} {} {}'.format(img_id, ex, segment[0], segment[1]))
           pred_links.append('{}_{} {} {} {}'.format(img_id, ex, i_gold_box, segment[0], segment[1]))
 
-    print('Number of examples kept={}'.format(ex+1))      
-         
+    print('Number of examples kept={}'.format(ex+1))             
     for i_label, label in enumerate(pred_units):
       pred_f.write('Class {}:\n'.format(i_label))
       pred_f.write('\n'.join(list(set(pred_units[label])))) # Set removes repetitive units
       pred_f.write('\n\n')
     pred_link_f.write('\n'.join(list(set(pred_links)))) # Set removes repetitive links
-
+  print('Finish extracting predicted units for speechcoco after {} s!\n'.format(time.time() - begin_time))
     
+def mscoco_extract_gold_units(caption_file, 
+                              box_file,
+                              class2idx_file=None,
+                              out_file='mscoco',
+                              ds_ratio=1):
+  begin_time = time.time()
+  print('Begin extracting gold units for mscoco...')
+  # Read caption corpus, alignments and concept cluster labels 
+  captions = []
+  concepts = []
+  with open(caption_file, 'r') as capt_f:
+    for line in capt_f:
+      captions.append(line.strip().split()) 
+
+  captions, segmentations = load_segmented_captions(caption_file, dataset='mscoco', segment_type='gold')
+  captions = captions[::ds_ratio]
+  segmentations = segmentations[::ds_ratio]
+  boxes, img_ids = load_boxes(box_file, dataset='speechcoco', out_file=out_file)
+  boxes = boxes[::ds_ratio]
+  img_ids = img_ids[::ds_ratio]
+  ignore_ids = []
+  print('Number of captions={}, number of segmentations={}, number of boxes={}'.format(len(captions), len(segmentations), len(boxes)))
+
+  with open('{}.wrd'.format(out_file), 'w') as word_f,\
+       open('{}.phn'.format(out_file), 'w') as phone_f,\
+       open('{}.link'.format(out_file), 'w') as link_f:
+      # Create gold clusters
+      ex = -1
+      for img_id, caption, segmentation, box in zip(img_ids, captions, segmentations, boxes):
+        caption = [w if not w in PERSON_S_CLASS else 'person' for w in caption]
+        caption = [w if not w in P2S else 'person' for w in caption]
+        units = match_caption_with_boxes(caption, box) 
+        if len(units) == 0:
+            ignore_ids.append(img_id)
+            continue
+        ex += 1
+        # if not w in class2idx and not w in P2S:
+        #   continue
+        # if 'arr_{}'.format(ex) in gold_units:
+        # print('Caption {}'.format(ex))
+
+        for seg, unit in zip(segmentation, units):
+          start, end = seg
+          phone_f.write('{}_{} {} {} {}\n'.format(img_id, ex, start, end, unit[3]))
+          word_f.write('{}_{} {} {} {}\n'.format(img_id, ex, start, end, unit[3]))
+          link_f.write('{}_{} {} {} {}\n'.format(img_id, ex, unit[1], start, end))
+  print('Finish extracting gold units for mscoco after {} s!\n'.format(time.time() - begin_time))
+  return ignore_ids
+ 
+
+def mscoco_extract_pred_units(pred_alignment_file,
+                              segmented_caption_file,
+                              pred_box_file, 
+                              gold_box_file,
+                              ignore_ids=None,
+                              ds_ratio=1,
+                              out_file='mscoco',
+                              segment_type='pred',
+                              include_null=True): # XXX
+  begin_time = time.time()
+  print('Start extracting predicted units for mscoco...')
+  with open(caption_file, 'r') as capt_f:
+    captions = [line.strip().split() for line in capt_f]
+  
+  with open(pred_alignment_file, 'r') as pred_align_f:
+    alignments = json.load(pred_align_f)
+
+  gold_boxes, img_ids = load_boxes(gold_box_file, dataset='speechcoco')
+  pred_boxes = json.load(open(pred_box_file, 'r'))
+  pred_boxes = [pred_boxes[img_id] for img_id in sorted(pred_boxes, key=lambda x:int(x.split('_')[-1])) if '_'.join(img_id.split('_')[:-1]) in img_ids]
+  captions, segmentations = load_segmented_captions(segmented_caption_file, dataset='mscoco', segment_type=segment_type)
+  print('Number of images with predicted boxes={}, number of images with gold boxes={}'.format(len(pred_boxes), len(gold_boxes)))
+  print('Number of captions={}, number of segmentations={}'.format(len(captions), len(segmentations)))
+  
+  pred_units = {}
+  pred_links = []
+  ex = -1
+  for img_id, gold_box, pred_box, segmentation, caption, align_info in zip(img_ids, gold_boxes, pred_boxes, segmentations, captions, alignments):
+    if img_id.split('.')[0] in ignore_ids:
+      continue
+    ex += 1
+    alignment = align_info['alignment']
+    box_alignment = match_boxes(pred_box, gold_box)
+    # print('{}_{}'.format(img_id, ex))
+    # print(caption)
+    # print(alignment)
+    # print(segmentation)
+    for i_pred_box, align_idx in enumerate(alignment):
+      i_gold_box = box_alignment[i_pred_box][0]
+      gold_box = box_alignment[i_pred_box][1:]
+      segment = segmentation[align_idx-1] if include_null else segmentation[align_idx] 
+      label = gold_box[4]
+      
+      if not label in pred_units:
+        pred_units[label] = ['{}_{} {} {}'.format(img_id, ex, segment[0], segment[1])]
+      else:
+        pred_units[label].append('{}_{} {} {}'.format(img_id, ex, segment[0], segment[1]))
+      pred_links.append('{}_{} {} {} {}'.format(img_id, ex, i_gold_box, segment[0], segment[1]))
+  print('Number of examples kept={}'.format(ex+1))
+
+  with open('{}_discovered_words.class'.format(out_file), 'w') as pred_f,\
+       open('{}_discovered_links.txt'.format(out_file), 'w') as pred_link_f:  
+    for i_label, label in enumerate(pred_units):
+        pred_f.write('Class {}\n'.format(i_label))
+        pred_f.write('\n'.join(list(set(pred_units[label])))) # set removes repetitive segments
+        pred_f.write('\n\n')
+    nonrepeated_links = list(set(pred_links))
+    sorted_links = sorted(nonrepeated_links, key=lambda x:int(x.split()[0].split('_')[-1]))
+    pred_link_f.write('\n'.join(sorted_links))
+  print('Finish extracting predicted units for mscoco after {} s!\n'.format(time.time()-begin_time))
 
 def flickr_extract_gold_units(caption_file,
                               box_file,
@@ -311,6 +420,8 @@ def flickr_extract_gold_units(caption_file,
                               top_word_file='/ws/ifp-53_2/hasegawa/lwang114/data/flickr30k/flickr30k_word_to_idx_filtered.json',
                               ignore_ids_file='/ws/ifp-53_2/hasegawa/lwang114/data/flickr30k/flickr8k_test_ids.txt',
                               out_file='flickr'):
+  print('Start extracting gold units for flickr ...')
+  begin_time = time.time()
   lemmatizer = WordNetLemmatizer()
   with open(caption_file, 'r') as capt_f,\
        open(ignore_ids_file, 'r') as ignore_f,\
@@ -358,6 +469,7 @@ def flickr_extract_gold_units(caption_file,
               phn_f.write('{}_{} {} {} {}\n'.format(img_id, ex, start, start+1, phn.encode('utf-8')))
               start += 1
   print('Number of examples={}'.format(len(boxes)))
+  print('Finish extracting gold units for flickr after {} s!\n'.format(time.time()-begin_time))
 
 
 def flickr_extract_pred_units(pred_alignment_file,
@@ -368,7 +480,9 @@ def flickr_extract_pred_units(pred_alignment_file,
                               top_word_file='/ws/ifp-53_2/hasegawa/lwang114/data/flickr30k/flickr30k_word_to_idx_filtered.json',
                               ignore_ids_file=None,
                               out_file='flickr',
-                              include_null=True): 
+                              include_null=True):
+  print('Start extracting predicted units for flickr ...')
+  begin_time = time.time()
   with open(pred_alignment_file, 'r') as pred_align_f,\
        open(ignore_ids_file, 'r') as ignore_f,\
        open('{}_discovered_words.class'.format(out_file), 'w') as pred_f,\
@@ -382,7 +496,7 @@ def flickr_extract_pred_units(pred_alignment_file,
     captions, segmentations = load_segmented_captions(segmented_caption_file)
     print('Number of images with predicted boxes={}, number of images with gold boxes={}'.format(len(pred_boxes), len(gold_boxes)))
     print('Number of captions={}, number of segmentations={}'.format(len(captions), len(segmentations)))
-
+    
     pred_units = {}
     pred_links = []
     ex = -1
@@ -395,7 +509,7 @@ def flickr_extract_pred_units(pred_alignment_file,
 
         for i_pred_box, align_idx in enumerate(alignment): 
           # print('i_pred_box, len(box_alignment): {} {}'.format(i_pred_box, len(box_alignment)))
-          # print('len(caption), align_idx: {} {}'.format(len(caption), align_idx))
+          # print('ex, len(caption), align_idx: {} {} {}'.format(ex, len(caption), align_idx))
           # print('len(alignment): {}'.format(len(alignment)))
           # print(caption)
           # print(box_alignment)
@@ -416,7 +530,8 @@ def flickr_extract_pred_units(pred_alignment_file,
         pred_f.write('\n'.join(list(set(pred_units[label])))) # set removes repetitive segments
         pred_f.write('\n\n')
     pred_link_f.write('\n'.join(list(set(pred_links))))
-
+    print('Finish extracting predicted units for flickr after {} s!'.format(time.time() - begin_time))
+    
 def cluster_to_word_units(cluster_file,
                           out_file):
   pred_units = {}
@@ -642,8 +757,8 @@ def term_discovery_retrieval_metrics(pred_file, gold_file, phone2idx_file=None, 
       for c, (purity, label) in enumerate(zip(token_recs, majority_classes)):
         f.write('Cluster {} purity: {}, majority class: {}\n'.format(c, purity, phones[label]))
       
-    print('Boundary recall: {}, precision: {}, f1: {}\n'.format(boundary_rec, boundary_prec, boundary_f1))
-    print('Token recall: {}, precision: {}, f1: {}\n'.format(token_rec, token_prec, token_f1))
+    print('Boundary recall: {}, precision: {}, f1: {}'.format(boundary_rec, boundary_prec, boundary_f1))
+    print('Token recall: {}, precision: {}, f1: {}'.format(token_rec, token_prec, token_f1))
     return boundary_f1, token_f1
 
   if visualize:
@@ -673,7 +788,7 @@ def term_discovery_retrieval_metrics(pred_file, gold_file, phone2idx_file=None, 
     plt.close()
 
 
-def linkF1(pred_file, gold_file, out_file):
+def linkF1(pred_file, gold_file, out_file, mode='iou'):
     correct = 0
     n_pred_links = 0
     n_gold_links = 0
@@ -709,22 +824,27 @@ def linkF1(pred_file, gold_file, out_file):
             n_gold_links += len(cur_gold_links)
             n_pred_links += len(cur_pred_links)
             for plink in cur_pred_links:
-                ious = []
-                for glink in cur_gold_links:
-                    # if plink[0] == glink[0] and plink[1] > glink[1] and plink[2] < glink[2]:
-                    ious.append(IoU(plink[1:], glink[1:]))    
-                correct += max(ious)
-
+                if mode == 'iou':
+                    ious = []
+                    for glink in cur_gold_links:
+                        ious.append(IoU(plink[1:], glink[1:]))    
+                    correct += max(ious)
+                elif mode == 'hit':
+                    for glink in cur_gold_links:
+                        if plink[0] == glink[0] and plink[1] >= glink[1] and plink[2] <= glink[2]:
+                            correct += 1
+                else:
+                    raise ValueError('Invalid mode {}'.format(mode))
         recall = correct / n_gold_links
         prec = correct / n_pred_links
         f1 = 2 * prec * recall / (prec + recall) if prec + recall > 0 else 0
-        print('Link recall: {:2f}, link precision: {:2f}, link F1: {:2f}'.format(recall*100, prec*100, f1*100))
+        print('Link recall: {:2f}, link precision: {:2f}, link F1: {:2f}\n'.format(recall*100, prec*100, f1*100))
         out_f.write('Link recall: {:2f}, link precision: {:2f}, link F1: {:2f}'.format(recall*100, prec*100, f1*100))
       
 if __name__ == '__main__':
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   parser.add_argument('--exp_dir', '-e', type=str, default='/ws/ifp-53_2/hasegawa/lwang114/fall2020/exp/cont_mixture_mscoco_davenet_rcnn_10_7_2020')
-  parser.add_argument('--dataset', '-d', choices={'speechcoco', 'flickr', 'mscoco'}, default='speechcoco')  
+  parser.add_argument('--dataset', '-d', choices={'speechcoco', 'flickr', 'mscoco', 'mscoco_text'}, default='speechcoco') 
   args = parser.parse_args()
 
 
@@ -732,26 +852,39 @@ if __name__ == '__main__':
     alignment_file = '{}/alignment.json'.format(args.exp_dir)
     data_root = '/ws/ifp-53_2/hasegawa/lwang114/data/mscoco/'
     caption_file = '{}/train2014/mscoco_train_text_captions.txt'.format(data_root)
-    segment_file = '{}/train2014/mscoco_train_word_segments.txt'.format(data_root)
+    segment_file = '{}/train2014/mscoco_train_word_segments.txt'.format(data_root) if args.dataset == 'speechcoco' else '{}/train2014/mscoco_train_word_phone_segments.txt'.format(data_root) 
     gold_box_file = '{}/train2014/mscoco_train_bboxes.txt'.format(data_root) 
     pred_box_file = '{}/train2014/mscoco_train_bboxes_rcnn.json'.format(data_root) 
 
+    alignments = json.load(open(alignment_file, 'r'))
+    ds_ratio = 1 
+    if 30000 < len(alignments) < 50000: # XXX
+        ds_ratio = 2
+    elif len(alignments) < 30000:
+        ds_ratio = 3
+
     ignore_ids = speechcoco_extract_gold_units(segment_file, 
                                                gold_box_file,
-                                               out_file='{}/speechcoco'.format(args.exp_dir))
+                                               out_file='{}/{}'.format(args.exp_dir, args.dataset),
+                                               ds_ratio=ds_ratio)
     speechcoco_extract_pred_units(alignment_file,
                                   segment_file,
                                   pred_box_file,
                                   gold_box_file,
                                   ignore_ids=ignore_ids,
-                                  out_file='{}/speechcoco'.format(args.exp_dir))
-    linkF1('{}/speechcoco_discovered_links.txt'.format(args.exp_dir),
-           '{}/speechcoco.link'.format(args.exp_dir),
-           out_file='{}/link_results'.format(args.exp_dir)) 
-    term_discovery_retrieval_metrics('{}/speechcoco_discovered_words.class'.format(args.exp_dir),
-                                   '{}/speechcoco.wrd'.format(args.exp_dir),
+                                  out_file='{}/{}'.format(args.exp_dir, args.dataset),
+                                  ds_ratio=ds_ratio,
+                                  include_null=False)
+    linkF1('{}/{}_discovered_links.txt'.format(args.exp_dir, args.dataset),
+           '{}/{}.link'.format(args.exp_dir, args.dataset),
+           out_file='{}/link_results.txt'.format(args.exp_dir))
+    linkF1('{}/{}_discovered_links.txt'.format(args.exp_dir, args.dataset),
+           '{}/{}.link'.format(args.exp_dir, args.dataset),
+           out_file='{}/link_results.txt'.format(args.exp_dir), mode='hit') 
+    term_discovery_retrieval_metrics('{}/{}_discovered_words.class'.format(args.exp_dir, args.dataset),
+                                   '{}/{}.wrd'.format(args.exp_dir, args.dataset),
                                    mode = 'hit',
-                                   phone2idx_file='{}/speechcoco_class2idx.json'.format(args.exp_dir),
+                                   phone2idx_file='{}/{}_class2idx.json'.format(args.exp_dir, args.dataset),
                                    out_file='{}/tde_results'.format(args.exp_dir))
   elif args.dataset == 'flickr':
     args.exp_dir = '/ws/ifp-53_2/hasegawa/lwang114/fall2020/exp/cont_mixture_aligner_flickr30k_phone_rcnn_10_1_2020' 
@@ -789,6 +922,48 @@ if __name__ == '__main__':
                                      '{}/flickr.wrd'.format(args.exp_dir),
                                      mode = 'iou',
                                      out_file='{}/tde_results_iou'.format(args.exp_dir))
+  elif args.dataset.split('_')[0] == 'mscoco':
+    alignment_file = '{}/alignment.json'.format(args.exp_dir)
+    data_root = '/ws/ifp-53_2/hasegawa/lwang114/data/mscoco/'
+    caption_file = '{}/train2014/mscoco_train_text_captions.txt'.format(data_root)
+    segment_file = '{}/train2014/mscoco_train_word_phone_segments.txt'.format(data_root)
+    # segmented_caption_file = '{}/train2014/mscoco_train_phone_captions_segmented.txt'.format(data_root)
+    segmented_caption_file = '{}/train2014/mscoco_train_text_captions.txt'.format(data_root) 
+    gold_box_file = '{}/train2014/mscoco_train_bboxes.txt'.format(data_root) 
+    pred_box_file = '{}/train2014/mscoco_train_bboxes_rcnn.json'.format(data_root) 
+
+    alignments = json.load(open(alignment_file, 'r'))
+    ds_ratio = 1 
+    if 30000 < len(alignments) < 50000: # XXX
+        ds_ratio = 2
+    elif len(alignments) < 30000:
+        ds_ratio = 3
+
+    ignore_ids = mscoco_extract_gold_units(segment_file, 
+                                           gold_box_file,
+                                           out_file='{}/{}'.format(args.exp_dir, args.dataset),
+                                           ds_ratio=ds_ratio)
+    mscoco_extract_pred_units(alignment_file,
+                              segmented_caption_file if args.dataset == 'mscoco' else segment_file,
+                              pred_box_file,
+                              gold_box_file,
+                              ignore_ids=ignore_ids,
+                              out_file='{}/{}'.format(args.exp_dir, args.dataset),
+                              ds_ratio=ds_ratio,
+                              segment_type='pred' if args.dataset == 'mscoco' else 'gold',
+                              include_null=True)
+
+    linkF1('{}/mscoco_discovered_links.txt'.format(args.exp_dir),
+           '{}/mscoco.link'.format(args.exp_dir),
+           out_file='{}/link_results.txt'.format(args.exp_dir))
+    linkF1('{}/mscoco_discovered_links.txt'.format(args.exp_dir),
+           '{}/mscoco.link'.format(args.exp_dir),
+           out_file='{}/link_results.txt'.format(args.exp_dir), mode='hit') 
+    term_discovery_retrieval_metrics('{}/mscoco_discovered_words.class'.format(args.exp_dir),
+                                   '{}/mscoco.wrd'.format(args.exp_dir),
+                                   mode = 'hit',
+                                   phone2idx_file='{}/mscoco_class2idx.json'.format(args.exp_dir),
+                                   out_file='{}/tde_results'.format(args.exp_dir))
 
   '''
   wrd_path = pkg_resources.resource_filename(
