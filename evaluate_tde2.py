@@ -256,6 +256,30 @@ def alignment_average_precision(pred_file,
 
   return average_precision
 
+def retrieval_average_precision(pred_file,
+                                out_file):
+  # ------
+  # Inputs:
+  # ------
+  #   pred_file: .npy file containing the predicted similarity score matrix
+  # -------
+  # Outputs:
+  # -------
+  #   precision, recall: lists of floats from [0, 1] for precision@n, recall@n respectively 
+  #   thresholds: list of detection thresholds
+  S = np.load(pred_file)
+  n = S.shape[0]
+  ranks = np.argsort(np.argsort(-S, axis=0), axis=0).T
+  y_scores = -ranks.flatten(order='C')
+  y_true = np.eye(n).flatten()
+  precision, recall, thresholds = precision_recall_curve(y_true, y_scores)
+  ap_dict = {'precision': precision, 'recall': recall}
+  ap_df = pd.DataFrame(ap_dict)
+  ap_df.to_csv(out_file)
+  average_precision = average_precision_score(y_true, y_scores)
+  
+  return average_precision 
+
 def tokenF1(pred_file,
             gold_file):
   # ------
@@ -1220,6 +1244,12 @@ if __name__ == '__main__':
                                 gold_box_file,
                                 out_file=pred_file,
                                 keep_id_file=keep_id_file)
-    ap = alignment_average_precision(pred_file, gold_file, '{}/avg_precision'.format(args.exp_dir))
+    ap = alignment_average_precision(pred_file, gold_file, '{}/avg_precision.csv'.format(args.exp_dir))
     print('Average precision={}\n'.format(ap))
     res_f.write('Average precision={}\n'.format(ap))
+  elif args.task == 3:
+    result_file = '{}/retrieval_AP_results.txt'.format(args.exp_dir)
+    res_f = open(result_file, 'w') 
+    pred_file = os.path.join(args.exp_dir, 'similarity.npy')
+    ap = retrieval_average_precision(pred_file, '{}/retrieval_avg_precision.csv'.format(args.exp_dir))
+    print('Average precision={}\n'.format(ap))
