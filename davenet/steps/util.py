@@ -29,6 +29,8 @@ def calc_recalls(image_outputs, audio_outputs, args, nframes, simtype='MISA', nr
             S = compute_attentive_matchmap_similarity_matrix(image_outputs, audio_outputs, nframes, nregions=nregions, simtype=simtype)
         else:
             S = compute_matchmap_similarity_matrix(image_outputs, audio_outputs, nframes, nregions=nregions, simtype=simtype)
+        np.save('{}/similarity.npy'.format(args.exp_dir), S.cpu().detach().numpy())
+        
         if args.alignment_scores:
             S_a = torch.FloatTensor(np.load(args.alignment_scores))
             S = (S.softmax(0) + S.softmax(1)) / 2 * S_a # XXX

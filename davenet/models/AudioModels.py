@@ -141,10 +141,10 @@ class SentenceRNN(nn.Module):
 
 
 class CNN_RNN_ENCODER(nn.Module):
-    def __init__(self,embedding_dim,n_layer):
+    def __init__(self,input_dim,embedding_dim,n_layer):
         super(CNN_RNN_ENCODER,self).__init__()
         self.embedding_dim = embedding_dim
-        self.Conv = nn.Conv1d(in_channels=49,out_channels=128,
+        self.Conv = nn.Conv1d(in_channels=input_dim,out_channels=128,
                               kernel_size=5,stride=1,
                               padding=0)
         self.bnorm = nn.BatchNorm1d(128)
@@ -152,7 +152,7 @@ class CNN_RNN_ENCODER(nn.Module):
                         bidirectional=True)
         self.att = multi_attention(in_size = embedding_dim, hidden_size = 128, n_heads = 1)
         
-    def forward(self, input, l):
+    def forward(self, input):
             # input = input.transpose(2,1)
             x = self.Conv(input)
             x = self.bnorm(x)

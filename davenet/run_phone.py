@@ -23,6 +23,7 @@ parser.add_argument("--data_dir",type=str,default="/ws/ifp-53_2/hasegawa/lwang11
 parser.add_argument("--exp-dir", type=str, default="outputs",
         help="directory to dump experiments")
 parser.add_argument("--resume",type=bool,default=False)
+parser.add_argument("--dataset", type=str, choices={'flickr', 'mscoco', 'flickr8k'}, default='mscoco') # XXX
 parser.add_argument("--optim", type=str, default="sgd",
         help="training optimizer", choices=["sgd", "adam"])
 parser.add_argument('-b', '--batch-size', default=32, type=int,
@@ -57,27 +58,60 @@ parser.add_argument('--only_eval',type=bool, default=False)
 parser.add_argument('--alignment_scores', type=str, default=None)
 args = parser.parse_args()
 
-train_loader = torch.utils.data.DataLoader(
-  dataloaders.ImagePhoneCaptionDataset(args.data_dir,'train'),
-  batch_size=args.batch_size,drop_last=True ,shuffle=True, num_workers=args.worker, pin_memory=True)
-val_loader = torch.utils.data.DataLoader(
-  dataloaders.ImagePhoneCaptionDataset(args.data_dir, 'val'),
-  batch_size=args.batch_size, shuffle=False, num_workers=args.worker, pin_memory=True)
+if args.dataset == 'mscoco':
+  train_loader = torch.utils.data.DataLoader(
+    dataloaders.ImagePhoneCaptionDataset(args.data_dir,'train',
+                                         image_feat_type='res34'),
+    batch_size=args.batch_size,drop_last=True ,shuffle=True, num_workers=args.worker, pin_memory=True)
+  val_loader = torch.utils.data.DataLoader(
+    dataloaders.ImagePhoneCaptionDataset(args.data_dir, 'val',
+                                         image_feat_type='res34'),
+    batch_size=args.batch_size, shuffle=False, num_workers=args.worker, pin_memory=True)
+elif args.dataset == 'flickr':
+  args.data_dir = '/ws/ifp-53_2/hasegawa/lwang114/data/flickr30k/'
+  train_loader = torch.utils.data.DataLoader(
+    dataloaders.ImagePhoneCaptionFlickrDataset(args.data_dir,'train',
+                                       max_nregions=15,
+                                       image_feat_type='res34'),
+    batch_size=args.batch_size,drop_last=True ,shuffle=True, num_workers=args.worker, pin_memory=True)
+  val_loader = torch.utils.data.DataLoader(
+    dataloaders.ImagePhoneCaptionFlickrDataset(args.data_dir, 'val',
+                                       max_nregions=15,
+                                       image_feat_type='res34'),
+    batch_size=args.batch_size, shuffle=False, num_workers=args.worker, pin_memory=True)
+else:
+  args.data_dir = '/ws/ifp-53_2/hasegawa/lwang114/data/flickr30k/'
+  train_loader = torch.utils.data.DataLoader(
+    dataloaders.ImagePhoneCaptionFlickr8kDataset(args.data_dir,'train',
+                                       max_nregions=20,
+                                       image_feat_type='res34'),
+    batch_size=args.batch_size,drop_last=True ,shuffle=True, num_workers=args.worker, pin_memory=True)
+  val_loader = torch.utils.data.DataLoader(
+    dataloaders.ImagePhoneCaptionFlickr8kDataset(args.data_dir, 'val',
+                                       max_nregions=20,
+                                       image_feat_type='res34'),
+    batch_size=args.batch_size, shuffle=False, num_workers=args.worker, pin_memory=True)
+  
 
 args.exp_dir = os.path.join(args.exp_dir,args.feature,args.losstype)   
 
 if not os.path.exists(args.exp_dir):
   os.makedirs("%s/models" % args.exp_dir)
 
+if args.dataset == 'mscoco':
+  input_dim = 49
+else:
+  input_dim = 81
+
 if args.feature == 'tensor':
-  audio_model = models.DavenetSmall(input_dim=49, embedding_dim=512)
+  audio_model = models.DavenetSmall(input_dim=input_dim, embedding_dim=512)
   image_model = models.NoOpEncoder(embedding_dim=512)
   if not args.only_eval:
     train(audio_model, image_model, train_loader, val_loader, args)
   else:
     evaluation(audio_model,image_model,val_loader,args)
 elif args.feature == 'vector':
-  audio_model = models.CNN_RNN_ENCODER(embedding_dim=512,n_layer=3)
+  audio_model = models.CNN_RNN_ENCODER(input_dim=input_dim, embedding_dim=512,n_layer=3)
   image_model = models.LinearTrans(embedding_dim=512)
   if not args.only_eval:
     train(audio_model, image_model, train_loader, val_loader, args)

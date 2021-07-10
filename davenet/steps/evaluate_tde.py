@@ -277,10 +277,10 @@ def speechcoco_extract_pred_units(pred_alignment_file,
         alignment = align_info['alignment']
         box_alignment = match_boxes(pred_box, gold_box)
 
-        print('{}_{}'.format(img_id, ex))
-        print(caption, len(caption))
-        print(alignment)
-        print(segmentation, len(segmentation))
+        # print('{}_{}'.format(img_id, ex))
+        # print(caption, len(caption))
+        # print(alignment)
+        # print(segmentation, len(segmentation))
         for i_pred_box, align_idx in enumerate(alignment):
           i_gold_box = box_alignment[i_pred_box][0]
           gold_box = box_alignment[i_pred_box][1:]
@@ -300,7 +300,9 @@ def speechcoco_extract_pred_units(pred_alignment_file,
       pred_f.write('Class {}:\n'.format(i_label))
       pred_f.write('\n'.join(list(set(pred_units[label])))) # Set removes repetitive units
       pred_f.write('\n\n')
-    pred_link_f.write('\n'.join(list(set(pred_links)))) # Set removes repetitive links
+    nonrepeated_links = list(set(pred_links))
+    sorted_links = sorted(nonrepeated_links, key=lambda x:int(x.split()[0].split('_')[-1]))
+    pred_link_f.write('\n'.join(sorted_links)) # Set removes repetitive links
   print('Finish extracting predicted units for speechcoco after {} s!\n'.format(time.time() - begin_time))
     
 def mscoco_extract_gold_units(caption_file, 
@@ -827,6 +829,7 @@ def linkF1(pred_file, gold_file, out_file, mode='iou'):
                 if mode == 'iou':
                     ious = []
                     for glink in cur_gold_links:
+                      if plink[0] == glink[0]:
                         ious.append(IoU(plink[1:], glink[1:]))    
                     correct += max(ious)
                 elif mode == 'hit':
@@ -927,8 +930,10 @@ if __name__ == '__main__':
     data_root = '/ws/ifp-53_2/hasegawa/lwang114/data/mscoco/'
     caption_file = '{}/train2014/mscoco_train_text_captions.txt'.format(data_root)
     segment_file = '{}/train2014/mscoco_train_word_phone_segments.txt'.format(data_root)
-    # segmented_caption_file = '{}/train2014/mscoco_train_phone_captions_segmented.txt'.format(data_root)
-    segmented_caption_file = '{}/train2014/mscoco_train_text_captions.txt'.format(data_root) 
+    if args.dataset == 'mscoco': 
+      segmented_caption_file = '{}/train2014/mscoco_train_phone_captions_segmented.txt'.format(data_root)
+    else:
+      segmented_caption_file = '{}/train2014/mscoco_train_text_captions.txt'.format(data_root) 
     gold_box_file = '{}/train2014/mscoco_train_bboxes.txt'.format(data_root) 
     pred_box_file = '{}/train2014/mscoco_train_bboxes_rcnn.json'.format(data_root) 
 
@@ -953,16 +958,16 @@ if __name__ == '__main__':
                               segment_type='pred' if args.dataset == 'mscoco' else 'gold',
                               include_null=True)
 
-    linkF1('{}/mscoco_discovered_links.txt'.format(args.exp_dir),
-           '{}/mscoco.link'.format(args.exp_dir),
+    linkF1('{}/{}_discovered_links.txt'.format(args.exp_dir, args.dataset),
+           '{}/{}.link'.format(args.exp_dir, args.dataset),
            out_file='{}/link_results.txt'.format(args.exp_dir))
-    linkF1('{}/mscoco_discovered_links.txt'.format(args.exp_dir),
-           '{}/mscoco.link'.format(args.exp_dir),
+    linkF1('{}/{}_discovered_links.txt'.format(args.exp_dir, args.dataset),
+           '{}/{}.link'.format(args.exp_dir, args.dataset),
            out_file='{}/link_results.txt'.format(args.exp_dir), mode='hit') 
-    term_discovery_retrieval_metrics('{}/mscoco_discovered_words.class'.format(args.exp_dir),
-                                   '{}/mscoco.wrd'.format(args.exp_dir),
+    term_discovery_retrieval_metrics('{}/{}_discovered_words.class'.format(args.exp_dir, args.dataset),
+                                   '{}/{}.wrd'.format(args.exp_dir, args.dataset),
                                    mode = 'hit',
-                                   phone2idx_file='{}/mscoco_class2idx.json'.format(args.exp_dir),
+                                   phone2idx_file='{}/{}_class2idx.json'.format(args.exp_dir, args.dataset),
                                    out_file='{}/tde_results'.format(args.exp_dir))
 
   '''

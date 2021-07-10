@@ -7,8 +7,8 @@ import time
 import torch
 import dataloaders
 import models
-from steps.traintest_attention import train_attention, validate_attention, evaluation_attention
-from steps.traintest_phone import train, validate, align, train_vector, evaluation,evaluation_vector
+from steps.traintest_attention import train_attention, validate_attention, evaluation_attention, align_attention
+from steps.traintest_phone import train, validate, align, train_vector, evaluation, evaluation_vector
 import numpy as np
 import json
 import random
@@ -58,6 +58,8 @@ parser.add_argument('--worker',type=int, default=0)
 parser.add_argument('--only_eval',type=bool, default=False)
 parser.add_argument('--alignment_scores', type=str, default=None)
 parser.add_argument('--precompute_acoustic_feature', action='store_true')
+parser.add_argument('--audio_model_file', type=str, default='audio_model.pth')
+parser.add_argument('--image_model_file', type=str, default='audio_model.pth')
 args = parser.parse_args()
 
 if args.dataset == 'mscoco':
@@ -132,5 +134,38 @@ else:
   if not args.only_eval:
     train_attention(audio_model, image_model, attention_model, train_loader, val_loader, args)
   else:
-    evaluation_attention(audio_model, image_model, attention_model, train_loader, val_loader, args)
+    loader_for_alignment = torch.utils.data.DataLoader(
+      dataloaders.OnlineImageAudioCaptionDataset(audio_root_path_test,
+                                                 image_root_path_test,
+                                                 segment_file_test,
+                                                 bbox_file_test,
+                                                 keep_index_file=split_file,
+                                                 configs={'return_boundary':True}),
+      batch_size=args.batch_size, shuffle=False, num_workers=args.worker, pin_memory=True)
 
+    if os.path.isdir(args.audio_model_file):
+      model_dir = args.audio_model_file
+      model_files = os.listdir(args.audio_model_file)
+      audio_model_files = []
+      image_model_files = []
+      for model_file in model_files:
+        if ('audio_model' in model_file) and (not 'best' in model_file):
+          if int(model_file.split('.')[-2]) % 5 == 0:
+            audio_model_files.append(model_file)
+        elif ('image_model' in model_file) and (not 'best' in model_file):
+          if int(model_file.split('.')[-2]) % 5 == 0:
+            image_model_files.append(model_file)
+      audio_model_files = sorted(audio_model_files, key=lambda x:int(x.split('.')[-2]))
+      image_model_files = sorted(image_model_files, key=lambda x:int(x.split('.')[-2]))
+      for audio_model_file, image_model_file in zip(audio_model_files, image_model_files):
+        print(audio_model_file)
+        args.audio_model_file = os.path.join(model_dir, audio_model_file)
+        args.image_model_file = os.path.join(model_dir, image_model_file)
+        args.alignment_scores = '{}_epoch{}.json'.format('alignment', audio_model_file.split('.')[-2])
+        audio_model = models.Transformer(embedding_dim=1024)
+        image_model = models.LinearTrans(input_dim=2048, embedding_dim=1024)
+        attention_model = models.DotProductAttention(in_size=1024)
+        align_attention(audio_model, image_model, loader_for_alignment, args)
+    else:    
+      evaluation_attention(audio_model, image_model, attention_model, val_loader, args)
+      # align_attention(audio_model, image_model, loader_for_alignment, args)

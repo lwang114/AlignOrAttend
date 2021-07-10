@@ -9,7 +9,7 @@ from .util import *
 import pdb
 import os
 
-def train_attention(audio_model, image_model, attention_model, train_loader, test_loader, args):
+def train(audio_model, image_model, train_loader, test_loader, args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.set_grad_enabled(True)
     # Initialize all of the statistics we want to keep track of
@@ -43,9 +43,6 @@ def train_attention(audio_model, image_model, attention_model, train_loader, tes
 
     if not isinstance(image_model, torch.nn.DataParallel):
         image_model = nn.DataParallel(image_model)
-  
-    if not isinstance(attention_model, torch.nn.DataParallel):
-        attention_model = nn.DataParallel(attention_model)
     
     if epoch != 0:
         audio_model.load_state_dict(torch.load("%s/models/audio_model.%d.pth" % (exp_dir, epoch)))
@@ -54,12 +51,10 @@ def train_attention(audio_model, image_model, attention_model, train_loader, tes
 
     audio_model = audio_model.to(device)
     image_model = image_model.to(device)
-    attention_model = attention_model.to(device)
     # Set up the optimizer
     audio_trainables = [p for p in audio_model.parameters() if p.requires_grad]
     image_trainables = [p for p in image_model.parameters() if p.requires_grad]
-    attention_trainables = [p for p in attention_model.parameters() if p.requires_grad]
-    trainables = audio_trainables + image_trainables + attention_trainables
+    trainables = audio_trainables + image_trainables
     if args.optim == 'sgd':
        optimizer = torch.optim.SGD(trainables, args.lr,
                                 momentum=args.momentum,
@@ -99,16 +94,24 @@ def train_attention(audio_model, image_model, attention_model, train_loader, tes
             audio_input = audio_input.to(device)
             image_input = image_input.to(device)
             image_input = image_input.transpose(2,1)
-            
+
             optimizer.zero_grad()
             
             audio_output = audio_model(audio_input)
-            image_output = image_model(image_input).unsqueeze(-1)
+            image_output = image_model(image_input).unsqueeze(-1) # Make the image output 4D
+
             pooling_ratio = round(audio_input.size(-1) / audio_output.size(-1))
             nphones = nphones // pooling_ratio
 
-            loss = attentive_mask_margin_softmax_loss(image_output, audio_output, attention_model,
-                                                      nphones, nregions=nregions, margin=args.margin, simtype=args.simtype)
+            if args.losstype == 'triplet':
+                loss = sampled_margin_rank_loss(image_output, audio_output,
+                nphones, nregions=nregions, margin=args.margin, simtype=args.simtype)
+            elif args.losstype == 'mml':
+                loss = mask_margin_softmax_loss(image_output, audio_output,
+                                                nphones, nregions=nregions, margin=args.margin, simtype=args.simtype)
+            elif args.losstype == 'DAMSM':
+                loss = DAMSM_loss(image_output, audio_output,
+                                                nphones, nregions=nregions, margin=args.margin, simtype=args.simtype)
             loss.backward()
             optimizer.step()
 
@@ -120,7 +123,7 @@ def train_attention(audio_model, image_model, attention_model, train_loader, tes
             if i % 500 == 0:
                 info = 'Itr {} {loss_meter.val:.4f} ({loss_meter.avg:.4f} '.format(i,loss_meter=loss_meter)
                 print(info)
-            i += 1
+            # i += 1
             # if i==2565:
                 # print(i)
                 # pdb.set_trace()
@@ -138,8 +141,8 @@ def train_attention(audio_model, image_model, attention_model, train_loader, tes
         if np.isnan(loss_meter.avg):
             print("training diverged...")
             return
-        if epoch % 5 == 0:
-            recalls = validate_attention(audio_model, image_model, attention_model, test_loader, args)
+        if epoch%5==0:
+            recalls = validate(audio_model, image_model, test_loader, args)
             
             avg_acc = (recalls['A_r10'] + recalls['I_r10']) / 2
 
@@ -299,8 +302,8 @@ def train_vector(audio_model, image_model, train_loader, test_loader, args):
         if np.isnan(loss_meter.avg):
             print("training diverged...")
             return
-        if epoch % 5 == 0:
-            recalls = validate_vector(audio_model, image_model, attention_model, test_loader, args)
+        if epoch%5==0:
+            recalls = validate_vector(audio_model, image_model, test_loader, args)
             
             avg_acc = (recalls['A_r10'] + recalls['I_r10']) / 2
 
@@ -326,7 +329,7 @@ def train_vector(audio_model, image_model, train_loader, test_loader, args):
             _save_progress()
         epoch += 1
 
-def validate_attention(audio_model, image_model, attention_model, val_loader, args):
+def validate(audio_model, image_model, val_loader, args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_time = AverageMeter()
     
@@ -334,9 +337,7 @@ def validate_attention(audio_model, image_model, attention_model, val_loader, ar
         audio_model = nn.DataParallel(audio_model)
     if not isinstance(image_model, torch.nn.DataParallel):
         image_model = nn.DataParallel(image_model)
-    if not isinstance(attention_model, torch.nn.DataParallel):
-        attention_model = nn.DataParallel(attention_model)
-
+    
     audio_model = audio_model.to(device)
     image_model = image_model.to(device)
     # switch to evaluate mode
@@ -356,9 +357,8 @@ def validate_attention(audio_model, image_model, attention_model, val_loader, ar
             image_input = image_input.transpose(2,1)
 
             # compute output
-            image_output = image_model(image_input)
+            image_output = image_model(image_input).unsqueeze(-1) # Make the image output 4D
             audio_output = audio_model(audio_input)
-            image_output = image_output.unsqueeze(-1) # Make the image output 4D
 
             image_output = image_output.to('cpu').detach()
             audio_output = audio_output.to('cpu').detach()
@@ -379,7 +379,7 @@ def validate_attention(audio_model, image_model, attention_model, val_loader, ar
         audio_output = torch.cat(A_embeddings)
         nphones = torch.cat(frame_counts)
         nregions = torch.cat(region_counts)
-        recalls = calc_recalls(image_output, audio_output, args, nphones, nregions=nregions, simtype=args.simtype)
+        recalls = calc_recalls(image_output, audio_output,args, nphones, nregions=nregions, simtype=args.simtype)
         A_r10 = recalls['A_r10']
         I_r10 = recalls['I_r10']
         A_r5 = recalls['A_r5']
@@ -446,24 +446,8 @@ def align(audio_model, image_model, val_loader, args):
 
             pooling_ratio = round(audio_input.size(-1) / audio_output.size(-1))
             n = image_output.size(0)
-           
-            # TODO Optionally segment the acoustic features 
-            boundaries = None
-            if nphones.dim() > 1:
-                print('Segmentations detected, segment the acoustic features...')
-                boundaries = nphones.cpu().detach().numpy()
-
+            
             for i_b in range(n):
-              if nphones.dim() > 1:
-                starts = np.nonzero(boundaries[i_b, 0])[0] // pooling_ratio
-                ends = np.nonzero(boundaries[i_b, 1])[0] // pooling_ratio
-                mask = np.zeros((len(starts), audio_output.size(1))) 
-                if len(starts) == 0:
-                    continue
-                for i_seg, (start, end) in enumerate(zip(starts, ends)): 
-                    mask[i_seg, start:end] = 1. / max(end - start, 1)
-                mask = torch.FloatTensor(mask).to(device=device)
-                audio_output = torch.matmul(mask, audio_output)
               M = computeMatchmap(image_output[i_b], audio_output[i_b])
               alignment_out = np.argmax(M.squeeze().numpy(), axis=0).tolist()
               alignment_resampled = [i_a for i_a in alignment_out for _ in range(pooling_ratio)]
@@ -542,7 +526,7 @@ def validate_vector(audio_model, image_model, val_loader, args):
     return recalls
 
 
-def evaluation_attention(audio_model, image_model,test_loader, args):
+def evaluation(audio_model, image_model,test_loader, args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.set_grad_enabled(True)
     # Initialize all of the statistics we want to keep track of
