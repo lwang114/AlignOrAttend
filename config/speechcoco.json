@@ -1,0 +1,22 @@
+{
+    "debug": false,
+    "dataset": "speechcoco",
+    "Kt": 400,
+    "Ks": 80,
+    "var": 160, 
+    "root": "/ws/ifp-53_2/hasegawa/lwang114/data/mscoco/",
+    "image_feat_file_test": "val2014/mscoco_val_rcnn_feature.npz",
+    "image_feat_file_test_retrieval": "val2014/mscoco_val_rcnn_feature_1k.npz",
+    "image_feat_file_train": "train2014/mscoco_train_rcnn_feature.npz",
+    "retrieval_split_file": "val2014/mscoco_val_split.txt",
+    "text_caption_file_test": "val2014/mscoco_val_phone_captions_segmented.txt",
+    "text_caption_file_test_retrieval": "val2014/mscoco_val_phone_captions_segmented_1k.txt",
+    "text_caption_file_train": "train2014/mscoco_train_phone_captions_segmented.txt",
+    "audio_feat_file_train": "../exp/mscoco_val_davenet_feats_10_5_2020/train_features_300dim.npz",
+    "audio_feat_file_test": "../exp/mscoco_val_davenet_feats_10_5_2020/test_features_300dim.npz", 
+    "top_word_file": "train2014/mscoco_train_phone_caption_top_words.txt",
+    "word_to_idx_file": "word2idx_unsup.json",
+    "audio_codebook": "../exp/dnnhmmdnn_mscoco_rcnn_word_9_26_2020/audio_codebook.npy",
+    "pretrained_vgmm_model": "../exp/dnnhmmdnn_mscoco_rcnn_word_9_26_2020/image_codebook.npy",
+    "exp_dir": "../exp/dnnhmmdnn_speechcoco_07_10_2021/"
+}
