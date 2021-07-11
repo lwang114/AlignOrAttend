@@ -2,6 +2,10 @@
 #                           CONTINUOUS MIXTURE ALIGNER CLASS                        #
 #-----------------------------------------------------------------------------------# 
 import numpy as np
+import sklearn
+from sklearn.cluster import KMeans
+from sklearn.mixture import BayesianGaussianMixture
+import argparse
 import logging
 import os
 import json
@@ -83,7 +87,7 @@ class FullyContinuousMixtureAligner(object):
     A = np.ones((L, L)) / max(L, 1)
     init = np.ones(L) / max(L, 1)
     backward_probs = np.zeros((T, L, self.Kt))
-    backward_probs[T-1] = 1. / max(scales[T-1], EPS)
+    backward_probs[T-1] = 1.
 
     A_diag = np.diag(np.diag(A))
     A_offdiag = A - A_diag
@@ -93,7 +97,7 @@ class FullyContinuousMixtureAligner(object):
       probs_x_t_z_given_y = trg_sent * probs_x_t_given_z[t]
       backward_probs[t-1] = A_diag @ (backward_probs[t] * probs_x_t_given_z[t])
       backward_probs[t-1] += np.tile(A_offdiag @ np.sum(backward_probs[t] * probs_x_t_z_given_y, axis=-1)[:, np.newaxis], (1, self.Kt))
-      backward_probs[t-1] /= max(scales[t-1], EPS) 
+      backward_probs[t-1] /= max(scales[t], EPS) 
     return backward_probs
     
   def update_counts(self):
@@ -118,8 +122,9 @@ class FullyContinuousMixtureAligner(object):
    
     forward_probs, scales = self.compute_forward_probs(V_src, V_trg)
     backward_probs = self.compute_backward_probs(V_src, V_trg, scales)
-    norm_factor = np.sum(forward_probs * backward_probs, axis=(1, 2), keepdims=True) 
-    new_state_counts = forward_probs * backward_probs / np.maximum(norm_factor, EPS) 
+    print('forward_probs * backward_probs: ', (forward_probs * backward_probs).sum(axis=(1, 2))) # XXX
+    norm_factor = np.sum(forward_probs * backward_probs, axis=(1, 2), keepdims=True)
+    new_state_counts = forward_probs * backward_probs / np.maximum(norm_factor, EPS)
     C_ts = np.sum(new_state_counts, axis=1).T @ (V_src / np.maximum(np.sum(V_src, axis=1, keepdims=True), EPS))
     log_prob = np.log(np.maximum(scales, EPS)).sum()
     return C_ts, log_prob
@@ -131,7 +136,9 @@ class FullyContinuousMixtureAligner(object):
       if len(trg_feat) == 0 or len(self.src_feats[i]) == 0:
         continue 
       trg_sent = trg_feat
+      # (src len, src vocab size)
       prob_f_given_y = self.prob_s_given_tsent(trg_sent)
+      # (src len, src vocab size)
       prob_f_given_x = np.exp(self.src_model.log_prob_z(i))
       post_f = prob_f_given_y * prob_f_given_x
       post_f /= np.maximum(np.sum(post_f, axis=1, keepdims=True), EPS)
@@ -153,7 +160,7 @@ class FullyContinuousMixtureAligner(object):
       self.update_components() # XXX
       print('Iteration {}, log likelihood={}'.format(i_iter, log_prob))
       logger.info('Iteration {}, log likelihood={}'.format(i_iter, log_prob))
-      if (i_iter + 1) % 1 == 0:
+      if (i_iter + 1) % 5 == 0:
         with open('{}_{}_means.json'.format(out_file, i_iter), 'w') as fm,\
              open('{}_{}_transprob.json'.format(out_file, i_iter), 'w') as ft:
           json.dump(self.src_model.means.tolist(), fm, indent=4, sort_keys=True)
@@ -170,9 +177,8 @@ class FullyContinuousMixtureAligner(object):
             align_dicts.append({'alignment': alignment.tolist(),
                                 'image_concepts': src_sent,
                                 'align_probs': P_a.tolist()})
-          with open('{}/alignment_{}.json'.format(args.exp_dir, i_iter), 'w') as f:
+          with open('{}/alignment_{}.json'.format(exp_dir, i_iter), 'w') as f:
             json.dump(align_dicts, f, indent=4, sort_keys=True)
-          
           self.retrieve(source_features_val, target_features_val, out_file='{}_{}'.format(out_file, i_iter))
 
         np.save('{}_{}_means.npy'.format(out_file, i_iter), self.src_model.means)
@@ -320,7 +326,8 @@ def to_one_hot(sent, K):
   else:
     return sent
 
-def load_mscoco(path, max_n_boxes=10):
+def load_mscoco(config, max_n_boxes=10):
+  path = config
   trg_feat_file_train = path['text_caption_file_train']
   src_feat_file_train = path['image_feat_file_train']
   trg_feat_file_test = path['text_caption_file_test_retrieval']
@@ -335,8 +342,8 @@ def load_mscoco(path, max_n_boxes=10):
          open(retrieval_split, 'r') as f_r,\
          open(trg_feat_file_test, 'w') as f_tx:
       splits = f_r.read().strip().split('\n')
-      trg_feat_test_full = f_tf.read().strip().split('\n') # XXX Choose the first out of five captions
-      trg_feat_test = [line for i, line in zip(splits, trg_feat_test_full) if i == '1'] # XXX
+      trg_feat_test_full = f_tf.read().strip().split('\n')
+      trg_feat_test = [line for i, line in zip(splits, trg_feat_test_full) if i == '1'] # XXX Choose the first out of five captions
       f_tx.write('\n'.join(trg_feat_test))
   
   if not os.path.isfile(word2idx_file):
@@ -353,9 +360,12 @@ def load_mscoco(path, max_n_boxes=10):
 
   with open(trg_feat_file_train, 'r') as f_tr,\
        open(trg_feat_file_test, 'r') as f_tx:
-      trg_str_train = f_tr.read().strip().split('\n') # XXX Choose the first out of five captions
+      trg_str_train = f_tr.read().strip().split('\n')
       trg_str_test = f_tx.read().strip().split('\n')
-      trg_feats_train = [[word2idx[tw] for tw in trg_sent.split()] for trg_sent in trg_str_train] # XXX
+      if config.get('debug', False):
+        trg_str_train = trg_str_train[:20]
+        trg_str_test = trg_str_test[:20]
+      trg_feats_train = [[word2idx[tw] for tw in trg_sent.split()] for trg_sent in trg_str_train] # XXX Choose the first out of five captions
       trg_feats_test = [[word2idx[tw] for tw in trg_sent.split() if tw in word2idx] for trg_sent in trg_str_test] # XXX
   
   src_feat_npz_train = np.load(src_feat_file_train)
@@ -418,10 +428,10 @@ def load_flickr(path):
   
 def load_speechcoco(path, max_n_boxes=10):
   trg_feat_file_train = path['audio_feat_file_train']
-  src_feat_file_train = path['image_feat_file_train']
+  src_feat_file_train = os.path.join(path["root"], path['image_feat_file_train'])
   trg_feat_file_test = path['audio_feat_file_test']
-  src_feat_file_test = path['image_feat_file_test']
-  test_image_ids_file = path['retrieval_split_file']
+  src_feat_file_test = os.path.join(path["root"], path['image_feat_file_test'])
+  test_image_ids_file = os.path.join(path["root"], path['retrieval_split_file'])
   codebook_file = path['audio_codebook']
   codebook = np.load(codebook_file)
   
@@ -431,13 +441,16 @@ def load_speechcoco(path, max_n_boxes=10):
   src_feat_test_npz = np.load(src_feat_file_test)  
 
   with open(test_image_ids_file, 'r') as f:
-    test_image_ids = [i for i, line in enumerate(f) if int(line)] # XXX
+    test_image_ids = [i for i, line in enumerate(f) if int(line)]
 
   gaussian_softmax = NegativeSquare(torch.FloatTensor(codebook), 1./30)
   trg_feats_train = []
   trg_embedding_dim = -1
   K_t = codebook.shape[0]
-  for ex, k in enumerate(sorted(trg_feat_train_npz, key=lambda x:int(x.split('_')[-1]))[::2]): # XXX
+  for ex, k in enumerate(sorted(trg_feat_train_npz, key=lambda x:int(x.split('_')[-1]))[::2]):
+    if path.get('debug', False) and len(trg_feats_train) >= 20:
+      break
+     
     if ex == 0:
       trg_embedding_dim = trg_feat_train_npz[k].shape[-1]
   
@@ -449,7 +462,9 @@ def load_speechcoco(path, max_n_boxes=10):
     trg_feats_train.append(trg_feat)
 
   trg_feats_test = []
-  for i, k in enumerate(sorted(trg_feat_test_npz, key=lambda x:int(x.split('_')[-1]))): # XXX
+  for i, k in enumerate(sorted(trg_feat_test_npz, key=lambda x:int(x.split('_')[-1]))): 
+    if path.get('debug', False) and len(trg_feats_test) >= 20:
+      break
     if len(trg_feat_test_npz) > 1000:
       if i in test_image_ids:
         if trg_feat_test_npz[k].shape[0] > 0:
@@ -466,148 +481,85 @@ def load_speechcoco(path, max_n_boxes=10):
           trg_feat = np.zeros((1, K_t))
       trg_feats_test.append(trg_feat)
       
-  src_feats_train = [src_feat_train_npz[k][:max_n_boxes] for k in sorted(src_feat_train_npz, key=lambda x:int(x.split('_')[-1]))[::2]] # XXX
+  train_keys = sorted(src_feat_train_npz, key=lambda x:int(x.split('_')[-1]))[::2]
+  if path.get('debug', False):
+    train_keys = train_keys[:20]
+  src_feats_train = [src_feat_train_npz[k][:max_n_boxes] for k in train_keys]
+
   if len(src_feat_test_npz) > 1000:
-      src_feats_test = [src_feat_test_npz[k][:max_n_boxes] for i, k in enumerate(sorted(src_feat_test_npz, key=lambda x:int(x.split('_')[-1]))) if i in test_image_ids] # XXX
+      src_feats_test = [src_feat_test_npz[k][:max_n_boxes] for i, k in enumerate(sorted(src_feat_test_npz, key=lambda x:int(x.split('_')[-1]))) if i in test_image_ids]
   else:
-      src_feats_test = [src_feat_test_npz[k][:max_n_boxes] for i, k in enumerate(sorted(src_feat_test_npz, key=lambda x:int(x.split('_')[-1])))] # XXX
+      src_feats_test = [src_feat_test_npz[k][:max_n_boxes] for i, k in enumerate(sorted(src_feat_test_npz, key=lambda x:int(x.split('_')[-1])))]
+  if path.get('debug', False):
+    src_feats_test = src_feats_test[:20]
+
   print('Number of training target sentences={}, number of training source sentences={}'.format(len(trg_feats_train), len(src_feats_train)))
   print('Number of test target sentences={}, number of test source sentences={}'.format(len(trg_feats_test), len(src_feats_test)))
   return src_feats_train, trg_feats_train, src_feats_test, trg_feats_test 
    
-if __name__ == '__main__':
-  import argparse
-  import sklearn
-  from sklearn.cluster import KMeans
-  from sklearn.mixture import BayesianGaussianMixture
-  
+if __name__ == '__main__':  
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  parser.add_argument('CONFIG', type=str, default=None)
   parser.add_argument('--exp_dir', '-e', type=str, default='./', help='Experimental directory')
-  parser.add_argument('--dataset', '-d', type=str, default='mscoco', choices={'mscoco', 'mscoco2k', 'mscoco20k', 'flickr30k', 'speechcoco2k', 'speechcoco'}, help='Dataset used')
-  parser.add_argument('--path_file', type=str, default=None)
+
   args = parser.parse_args()
-  if not os.path.isdir(args.exp_dir):
-    os.mkdir(args.exp_dir)
+  config = json.load(open(args.CONFIG))
+  exp_dir = config.get('exp_dir', './')
+  if not os.path.isdir(exp_dir):
+    os.mkdir(exp_dir) 
   
-  logging.basicConfig(filename='{}/train.log'.format(args.exp_dir), format='%(asctime)s %(message)s', level=logging.DEBUG)
-  if args.path_file:
-    with open(args.path_file, 'r') as f:
-      path = json.load(f)
-  elif os.path.isfile('../../data/{}_path.json'.format(args.dataset)):
-    with open('../../data/{}_path.json'.format(args.dataset), 'r') as f:
-      path = json.load(f)
-  else:
-    with open('../../data/{}_path.json'.format(args.dataset), 'w') as f:
-      if args.dataset == 'mscoco':
-        root = '/ws/ifp-53_2/hasegawa/lwang114/data/mscoco/'
-        path = {'root': root,\
-              'text_caption_file_train': '{}/train2014/mscoco_train_text_captions.txt'.format(root),\
-              'text_caption_file_test': '{}/val2014/mscoco_val_text_captions.txt'.format(root),\
-              'text_caption_file_test_retrieval': '{}/val2014/mscoco_val_text_captions_1k.txt'.format(root),\
-              'image_feat_file_train': '{}/train2014/mscoco_train_res34_embed512dim.npz'.format(root),\
-              'image_feat_file_test': '{}/val2014/mscoco_val_res34_embed512dim.npz'.format(root),\
-              'image_feat_file_test_retrieval': '{}/val2014/mscoco_val_res34_embed512dim_1k.npz'.format(root),\
-              'retrieval_split_file': '{}/val2014/mscoco_val_split.txt'.format(root),\
-              'word_to_idx_file': '{}/word2idx.json'.format(root),\
-              'top_word_file': '{}/train2014/mscoco_train_phone_caption_top_words.txt'.format(root),\
-              'pretrained_vgmm_model': '/ws/ifp-53_2/hasegawa/lwang114/fall2020/exp/dnnhmmdnn_mscoco_rcnn_word_9_26_2020/image_codebook.npy'
-              }
-      elif args.dataset == 'mscoco2k' or args.dataset == 'mscoco20k':
-        root = '/ws/ifp-53_2/hasegawa/lwang114/data/mscoco/mscoco2k/feats/'
-        path = {'root': root,\
-                'text_caption_file_train': '{}/{}_image_captions.txt'.format(root, args.dataset),\
-                # 'text_caption_file_train_retrieval': '{}/mscoco20k_image_captions_train.txt'.format(root),\ # TODO
-                'text_caption_file_test': '{}/{}_image_captions.txt'.format(root, args.dataset),\
-                'text_caption_file_test_retrieval': '{}/{}_image_captions_test.txt'.format(root, args.dataset),
-                'image_feat_file_train': '{}/{}_res34_embed512dim.npz'.format(root, args.dataset),\
-                'image_feat_file_test': '{}/{}_res34_embed512dim.npz'.format(root, args.dataset),\
-                'image_feat_file_test_retrieval': '{}/{}_res34_embed512dim_test.npz'.format(root, args.dataset),\
-                'retrieval_split_file': '{}/{}_split_0_retrieval.txt'.format(root, args.dataset),\
-                'word_to_idx_file': '{}/concept2idx_65class.json'.format(root),
-                'top_word_file': '{}/concept2idx_65class.json'.format(root)
-                }
-      elif args.dataset == 'flickr30k':
-        root = '/ws/ifp-53_2/hasegawa/lwang114/data/flickr30k/'
-        path = {'root': root,\
-                'text_caption_file': '{}/flickr30k_text_captions_filtered.txt'.format(root),\
-                'image_feat_file': '{}/flickr30k_res34_rcnn.npz'.format(root),\
-                'test_image_ids_file': '{}/flickr8k_test.txt'.format(root),\
-                'word_to_idx_file': '{}/flickr30k_word_to_idx_filtered.json'.format(root)
-                }
-      elif args.dataset == 'speechcoco2k':
-        root = '/ws/ifp-53_2/hasegawa/lwang114/data/mscoco/mscoco2k/feats/'
-        path = {'root': root,\
-                'audio_feat_file_train': '{}/mscoco2k_ctc_embed200dim_word.npz'.format(root),
-                'audio_feat_file_test': '{}/mscoco2k_ctc_embed200dim_word.npz'.format(root),
-                'image_feat_file_train': '{}/mscoco2k_res34_embed512dim.npz'.format(root),
-                'image_feat_file_test': '{}/mscoco2k_res34_embed512dim.npz'.format(root),
-                'retrieval_split_file': '{}/../mscoco2k_retrieval_split.txt'.format(root),
-                'audio_codebook': '/ws/ifp-53_2/hasegawa/lwang114/fall2020/exp/dnnhmmdnn_mscoco2k_word_9_22_2020/audio_codebook.npy',
-                'pretrained_vgmm_model': '/ws/ifp-53_2/hasegawa/lwang114/fall2020/exp/dnnhmmdnn_mscoco2k_word_9_22_2020/image_codebook.npy'
-                }
-      elif args.dataset == 'speechcoco':
-        root = '/ws/ifp-53_2/hasegawa/lwang114/data/mscoco/'
-        path = {'root': root,\
-                'audio_feat_file_train': '{}/train2014/mscoco_train_ctc_embed1000dim_word.npz'.format(root),
-                'audio_feat_file_test': '{}/val2014/mscoco_val_ctc_embed1000dim_word.npz'.format(root),
-                'image_feat_file_train': '{}/train2014/mscoco_train_rcnn_feature.npz'.format(root),
-                'image_feat_file_test': '{}/val2014/mscoco_val_rcnn_feature.npz'.format(root),
-                'retrieval_split_file': '{}/val2014/mscoco_val_split.txt'.format(root),
-                'pretrained_vgmm_model': '/ws/ifp-53_2/hasegawa/lwang114/fall2020/exp/dnnhmmdnn_mscoco_rcnn_word_9_26_2020/image_codebook.npy'}
+  logging.basicConfig(filename='{}/train.log'.format(exp_dir), format='%(asctime)s %(message)s', level=logging.DEBUG)
 
-      json.dump(path, f, indent=4, sort_keys=True)
-
-  if args.dataset == 'mscoco':       
-    src_feats_train, trg_feats_train, src_feats_test, trg_feats_test = load_mscoco(path)
-    with open(path['word_to_idx_file'], 'r') as f:
+  if config['dataset'] == 'mscoco':       
+    src_feats_train, trg_feats_train, src_feats_test, trg_feats_test = load_mscoco(config)
+    with open(config['word_to_idx_file'], 'r') as f:
       word_to_idx = json.load(f)
     Kt = len(word_to_idx)+1
     Ks = 80
     var = 160
     trg_feats_train_dict = {'arr_{}'.format(ex):np.asarray(trg_feat) for ex, trg_feat in enumerate(trg_feats_train)}
     trg_feats_test_dict = {'arr_{}'.format(ex):np.asarray(trg_feat) for ex, trg_feat in enumerate(trg_feats_test)}
-  elif args.dataset == 'mscoco2k' or args.dataset == 'mscoco20k':
+  elif config['dataset'] == 'mscoco2k' or config['dataset'] == 'mscoco20k':
     Kt = Ks = 65
     var = 160
-    src_feats_train, trg_feats_train, src_feats_test, trg_feats_test = load_mscoco(path)
-  elif args.dataset == 'flickr30k':
-    src_feats_train, trg_feats_train, src_feats_test, trg_feats_test = load_flickr(path)
-    Kt = 2001
-    Ks = 600 # XXX
-    var = 160
+    src_feats_train, trg_feats_train, src_feats_test, trg_feats_test = load_mscoco(config)
+  elif config['dataset'] == 'flickr30k':
+    src_feats_train, trg_feats_train, src_feats_test, trg_feats_test = load_flickr(config)
+    Kt = config.get('Kt', 2001)
+    Ks = config.get('Ks', 600)
+    var = config.get('var', 160)
     pretrained_vgmm_model = None
-  elif args.dataset == 'speechcoco2k':
-    Kt = Ks = 65
-    if not 'audio_codebook' in path:
-      trg_feat_file_train = path['audio_feat_file_train']
+  elif config['dataset'] == 'speechcoco2k':
+    Kt = Ks = config.get('Kt', 65)
+    if not 'audio_codebook' in config:
+      trg_feat_file_train = config['audio_feat_file_train']
       trg_feat_train_npz = np.load(trg_feat_file_train)
       X = np.concatenate([trg_feat_train_npz[k] for k in sorted(trg_feat_train_npz, key=lambda x:int(x.split('_')[-1]))], axis=0) # XXX
       codebook = KMeans(n_clusters=Kt).fit(X).cluster_centers_ 
-      np.save('{}/audio_codebook.npy'.format(args.exp_dir), codebook)
-      path['audio_codebook'] = '{}/audio_codebook.npy'.format(args.exp_dir)
+      np.save('{}/audio_codebook.npy'.format(exp_dir), codebook)
+      config['audio_codebook'] = '{}/audio_codebook.npy'.format(exp_dir)
 
-    src_feats_train, trg_feats_train, src_feats_test, trg_feats_test = load_speechcoco(path)
-    var = 10.
-  elif args.dataset == 'speechcoco':
-    Kt = 400 # XXX
-    Ks = 80
+    src_feats_train, trg_feats_train, src_feats_test, trg_feats_test = load_speechcoco(config)
+    var = config.get('var', 10.)
+  elif config['dataset'] == 'speechcoco':
+    Kt = config.get('Kt', 400)
+    Ks = config.get('Ks', 80)
     print('Start initializing audio codebook ...')
-    if not 'audio_codebook' in path:
-      trg_feat_file_train = path['audio_feat_file_train']
+    if not 'audio_codebook' in config:
+      trg_feat_file_train = config['audio_feat_file_train']
       trg_feat_train_npz = np.load(trg_feat_file_train)
       X = np.concatenate([trg_feat_train_npz[k] for k in sorted(trg_feat_train_npz, key=lambda x:int(x.split('_')[-1]))[::2]], axis=0) # XXX
       # gmm = BayesianGaussianMixture(n_components=Kt, covariance_type='diag', weight_concentration_prior=1000., max_iter=1000).fit(X)
-      codebook = KMeans(n_clusters=Kt).fit(X).cluster_centers_ # XXX
-      np.save('{}/audio_codebook.npy'.format(args.exp_dir), codebook)
-      # np.save('{}/audio_codebook_covariances.npy'.format(args.exp_dir), gmm.covariances_) # XXX
-      path['audio_codebook'] = '{}/audio_codebook.npy'.format(args.exp_dir)
+      codebook = KMeans(n_clusters=Kt).fit(X).cluster_centers_
+      np.save('{}/audio_codebook.npy'.format(exp_dir), codebook)
+      config['audio_codebook'] = '{}/audio_codebook.npy'.format(exp_dir)
     print('Finish initializing the audio codebook!')
 
-    src_feats_train, trg_feats_train, src_feats_test, trg_feats_test = load_speechcoco(path)
-    var = 160. # XXX
+    src_feats_train, trg_feats_train, src_feats_test, trg_feats_test = load_speechcoco(config)
+    var = config.get('var', 160.)
 
-  pretrained_vgmm_model = path.get('pretrained_vgmm_model', None)
-  pretrained_translateprob = path.get('pretrained_translateprob', None)
+  pretrained_vgmm_model = config.get('pretrained_vgmm_model', None)
+  pretrained_translateprob = config.get('pretrained_translateprob', None)
   
   aligner = FullyContinuousMixtureAligner(src_feats_train,
                                           trg_feats_train,
@@ -616,8 +568,8 @@ if __name__ == '__main__':
                                                    'var':var,
                                                    'pretrained_vgmm_model':pretrained_vgmm_model,
                                                    'pretrained_translateprob':pretrained_translateprob})
-  aligner.trainEM(10, '{}/mixture'.format(args.exp_dir), source_features_val=src_feats_test, target_features_val=trg_feats_test) # XXX
-  aligner.retrieve(src_feats_test, trg_feats_test, '{}/retrieval'.format(args.exp_dir)) 
+  aligner.trainEM(10, '{}/mixture'.format(exp_dir), source_features_val=src_feats_test, target_features_val=trg_feats_test)
+  aligner.retrieve(src_feats_test, trg_feats_test, '{}/retrieval'.format(exp_dir)) 
   alignments, align_probs = aligner.align_sents(src_feats_test, trg_feats_test, return_align_matrix=True)
   align_dicts = []
   for src_feat, alignment, P_a in zip(src_feats_test, alignments, align_probs):
@@ -628,7 +580,5 @@ if __name__ == '__main__':
     align_dicts.append({'alignment': alignment.tolist(),
                         'image_concepts': src_sent,
                         'align_probs': P_a.tolist()})
-  with open('{}/alignment_test.json'.format(args.exp_dir), 'w') as f:
+  with open('{}/alignment_test.json'.format(exp_dir), 'w') as f:
     json.dump(align_dicts, f, indent=4, sort_keys=True)
-
-  # aligner.print_alignment('{}/alignment.json'.format(args.exp_dir))
