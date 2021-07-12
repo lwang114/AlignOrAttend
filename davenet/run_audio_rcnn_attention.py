@@ -20,6 +20,7 @@ print("I am process %s, running on %s: starting (%s)" % (
         os.getpid(), os.name, time.asctime()))
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+parser.add_argument("--config", type=str)
 parser.add_argument("--data_dir",type=str, default="/ws/ifp-53_2/hasegawa/lwang114/data/mscoco/")
 parser.add_argument("--exp-dir", type=str, default="outputs",
         help="directory to dump experiments")
@@ -37,7 +38,7 @@ parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
     help='momentum')
 parser.add_argument('--weight-decay', '--wd', default=5e-7, type=float,
     metavar='W', help='weight decay (default: 1e-4)')
-parser.add_argument("--n_epochs", type=int, default=100,
+parser.add_argument("--n_epochs", type=int, default=21,
         help="number of maximum training epochs")
 parser.add_argument("--n_print_steps", type=int, default=10,
         help="number of steps to print statistics")
@@ -61,6 +62,11 @@ parser.add_argument('--precompute_acoustic_feature', action='store_true')
 parser.add_argument('--audio_model_file', type=str, default=None)
 parser.add_argument('--image_model_file', type=str, default=None)
 args = parser.parse_args()
+if args.config:
+  config = json.load(open(args.config))
+  args.exp_dir = config['exp_dir']
+  args.losstype = config['losstype']
+  args.feature = config['feature']
 
 if args.dataset == 'mscoco':
   if args.precompute_acoustic_feature:

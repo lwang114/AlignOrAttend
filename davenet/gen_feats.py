@@ -96,6 +96,7 @@ def compress_acoustic_features(feat_file,
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--config', type=str)
     parser.add_argument('--data_dir', type=str, default='/ws/ifp-53_2/hasegawa/lwang114/data/mscoco/')
     parser.add_argument('--exp_dir', '-e', type=str, default='./')
     parser.add_argument('--batch_size', '-b', type=int, default=15)
@@ -104,6 +105,11 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', '-d', choices={'mscoco', 'speechcoco'}, default='mscoco')
     parser.add_argument('--layer_num', '-l', type=int, choices={3, 4, 5}, default=5)
     args = parser.parse_args()
+    if args.config:
+        config = json.load(open(args.config))
+        args.exp_dir = config['exp_dir']
+        args.dataset = config['dataset']
+
     if not os.path.isdir(args.exp_dir):
         os.mkdir(args.exp_dir)
     
@@ -165,19 +171,18 @@ if __name__ == '__main__':
                                               shuffle=False, 
                                               num_workers=1, 
                                               pin_memory=True)
-    ''' 
+     
     generate_acoustic_features(audio_model,
                                train_loader,
                                out_file='{}/train_features.npz'.format(args.exp_dir))
-    '''
+
     generate_acoustic_features(audio_model,
                                test_loader,
                                out_file='{}/test_features.npz'.format(args.exp_dir))
-    '''
+
     compress_acoustic_features('{}/train_features.npz'.format(args.exp_dir),
                                compressed_dim=300, # XXX
                                out_file='{}/train_features_300dim'.format(args.exp_dir))
-    '''
     compress_acoustic_features('{}/test_features.npz'.format(args.exp_dir),
                                compressed_dim=300, # XXX
                                out_file='{}/test_features_300dim'.format(args.exp_dir))
