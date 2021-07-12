@@ -1,0 +1,6 @@
+{
+    "exp_dir": "mscoco_val_davenet_feats_10_5_2020",
+    "dataset": "speechcoco",
+    "losstype": "mml",
+    "feature": "tensor" 
+}
